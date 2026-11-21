@@ -1,5 +1,10 @@
 /* Simple Inventory — UI. Vanilla JS, hash routing, no build step. */
 (() => {
+  // Release number shown on the home screen. Bump APP_VERSION for a new release
+  // and APP_BUILD for every upload; keep sw.js VERSION in step so phones update.
+  const APP_VERSION = '1.0';
+  const APP_BUILD = 1;
+
   const $view = document.getElementById('view');
   const $title = document.getElementById('title');
   const $back = document.getElementById('backBtn');
@@ -204,6 +209,7 @@
           ${ICON.chev}
         </a>`).join('')}</div>`
       : `<div class="empty">${ICON.box}<b>No projects yet</b>Create a project to start tracking its inventory.</div>`}
+      <p class="app-version">Simple Inventory · Version ${APP_VERSION} · Build ${APP_BUILD}</p>
       <button class="fab" id="newProj">${ICON.plus}New project</button>
     </div>`);
     frag.getElementById('newProj').onclick = async () => {

@@ -1,6 +1,6 @@
 /* Offline support: cache the app shell, serve it cache-first (works with no signal).
  * Bump VERSION whenever any app file changes so phones pick up the update. */
-const VERSION = 'v1';
+const VERSION = '1.0-build1';
 const CACHE = `inventory-${VERSION}`;
 const SHELL = [
   './', 'index.html', 'styles.css', 'db.js', 'app.js', 'manifest.webmanifest',

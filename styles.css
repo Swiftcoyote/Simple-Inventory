@@ -128,6 +128,8 @@ main { padding-block: 12px calc(110px + var(--safe-b)); padding-left: max(16px, 
 .empty { text-align: center; color: var(--muted); padding: 48px 16px; }
 .empty b { display: block; color: var(--text); font-size: 18px; margin-bottom: 6px; }
 
+.app-version { text-align: center; color: var(--muted); font-size: 13px; margin: 28px 0 0; }
+
 /* ---------- floating action button ---------- */
 .fab {
   position: fixed; right: 16px; bottom: calc(20px + var(--safe-b)); z-index: 5;
