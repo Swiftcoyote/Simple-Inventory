@@ -8,6 +8,10 @@
   const $toast = document.getElementById('toast');
 
   // ---------- helpers ----------
+  const ss = {
+    get: (k) => { try { return sessionStorage.getItem(k); } catch { return null; } },
+    set: (k, v) => { try { sessionStorage.setItem(k, v); } catch {} },
+  };
   const esc = (s) => String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
   const h = (html) => { const t = document.createElement('template'); t.innerHTML = html.trim(); return t.content; };
 
@@ -452,12 +456,12 @@
   // ---------- router ----------
   /** Return to the parent screen: pop history when we came from it, else replace. */
   function goBack(hash) {
-    if (history.length > 1 && sessionStorage.getItem('nav')) history.back();
+    if (history.length > 1 && ss.get('nav')) history.back();
     else go(hash, true);
   }
 
   function go(hash, replace = false) {
-    sessionStorage.setItem('nav', '1');
+    ss.set('nav', '1');
     if (replace) { history.replaceState(null, '', hash); render(); } else location.hash = hash;
   }
 
@@ -487,7 +491,7 @@
     urls = urls.filter(u => live.has(u) || (URL.revokeObjectURL(u), false));
   }
 
-  window.addEventListener('hashchange', () => { sessionStorage.setItem('nav', '1'); $sheetRoot.replaceChildren(); render(); });
+  window.addEventListener('hashchange', () => { ss.set('nav', '1'); $sheetRoot.replaceChildren(); render(); });
   window.addEventListener('pageshow', (e) => { if (e.persisted) render(); });
 
   // ---------- boot ----------
@@ -496,7 +500,9 @@
   });
   DB.persist();
 
-  if ('serviceWorker' in navigator && window.isSecureContext) {
+  let canSW = false;
+  try { canSW = 'serviceWorker' in navigator && window.isSecureContext && window.top === window; } catch {}
+  if (canSW) {
     navigator.serviceWorker.register('sw.js').then(reg => {
       reg.addEventListener('updatefound', () => {
         const nw = reg.installing;
