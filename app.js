@@ -61,6 +61,7 @@
     plus: '<svg viewBox="0 0 24 24" width="22" height="22"><path d="M12 5v14M5 12h14" stroke="currentColor" stroke-width="2.6" stroke-linecap="round"/></svg>',
     chev: '<svg class="chev" viewBox="0 0 24 24" width="20" height="20"><path d="M9 5l7 7-7 7" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/></svg>',
     camera: '<svg viewBox="0 0 24 24" width="28" height="28" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"><path d="M4 8h3l2-3h6l2 3h3v11H4z"/><circle cx="12" cy="13" r="3.5"/></svg>',
+    chart: '<svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><path d="M5 20V11M12 20V5M19 20v-6"/></svg>',
     box: '<svg viewBox="0 0 24 24" width="24" height="24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"><path d="M3 7l9-4 9 4v10l-9 4-9-4z"/><path d="M3 7l9 4 9-4M12 11v10"/></svg>',
   };
 
@@ -135,6 +136,13 @@
     get: (pid) => { try { return JSON.parse(ls.get(`lastPlace:${pid}`)) || {}; } catch { return {}; } },
     set: (pid, v) => ls.set(`lastPlace:${pid}`, JSON.stringify(v)),
   };
+
+  // People (1.6): one app-wide list in Settings › People. The last name picked on this
+  // phone is preselected, so a person using their own phone picks it once.
+  const lastPerson = { get: () => ls.get('lastPerson') || '', set: (v) => { if (v) ls.set('lastPerson', v); } };
+  const personStart = (people, entry) => entry ? (entry.person || '') : people.includes(lastPerson.get()) ? lastPerson.get() : null;
+  const personHtml = (people, entry) => pickHtml('who', 'Who', people, personStart(people, entry), 'person');
+  const WHO_MSG = 'Choose or type who is doing this';
 
   /** A dropdown of a project's locations or owners, with "+ New …" that opens a text box.
    *  value: the name to preselect; '' preselects "Not set" (old entries); null = none. */
@@ -234,8 +242,8 @@
   async function movementSheet(product, dir, entry = null) {
     const isOut = dir === 'out';
     const isCount = entry?.kind === 'count';
-    const [notes, project, moves] = await Promise.all([
-      DB.recentNotes(product.projectId).catch(() => []), DB.getProject(product.projectId), DB.listMovements(product.id),
+    const [notes, project, moves, people] = await Promise.all([
+      DB.recentNotes(product.projectId).catch(() => []), DB.getProject(product.projectId), DB.listMovements(product.id), DB.listPeople(),
     ]);
     const today = toDateInput();
     const base = bucketsWithout(moves, entry);        // stock per place without this entry
@@ -258,6 +266,7 @@
         <p class="desc" style="margin-top:-8px">${esc(productName(product))}</p>
         <form class="move-form">
           ${dateHtml(startDate, today)}
+          ${personHtml(people, entry)}
           ${isOut ? fromHtml(sources, startFrom)
             : pickHtml('loc', 'Location', project.locations || [], startLoc, 'location') + pickHtml('own', 'Owner', project.owners || [], startOwner, 'owner')}
           ${qtyHtml(`Quantity ${isOut ? 'removed' : 'added'}`, startQty)}
@@ -309,6 +318,8 @@
           f.onsubmit = (e) => {
             e.preventDefault();
             const pl = place();
+            const person = readPick(f, 'who');
+            if (person == null) { toast(WHO_MSG); return; }
             if (isOut && !pl) { toast('Choose where it comes from'); return; }
             if (!isOut && pl.location == null) { toast('Choose or type a location'); return; }
             if (!isOut && pl.owner == null) { toast('Choose or type an owner'); return; }
@@ -328,8 +339,9 @@
             const d = readDate(f, today, entry, startDate);
             if (!d) return;
             if (!isOut) lastPlace.set(product.projectId, pl);
+            if (!entry) lastPerson.set(person);
             close();
-            resolve({ delta: isOut ? -n : n, ...d, note: f.elements.note.value, ...pl, lowStockAt });
+            resolve({ delta: isOut ? -n : n, ...d, note: f.elements.note.value, ...pl, person, lowStockAt });
           };
         });
     });
@@ -337,8 +349,8 @@
 
   /** Move stock from one place to another (or edit a move). Total stock is unchanged. */
   async function moveSheet(product, entry = null) {
-    const [notes, project, moves] = await Promise.all([
-      DB.recentNotes(product.projectId).catch(() => []), DB.getProject(product.projectId), DB.listMovements(product.id),
+    const [notes, project, moves, people] = await Promise.all([
+      DB.recentNotes(product.projectId).catch(() => []), DB.getProject(product.projectId), DB.listMovements(product.id), DB.listPeople(),
     ]);
     const today = toDateInput();
     const base = bucketsWithout(moves, entry);
@@ -352,6 +364,7 @@
         <p class="desc" style="margin-top:-8px">${esc(productName(product))}</p>
         <form class="move-form">
           ${dateHtml(startDate, today)}
+          ${personHtml(people, entry)}
           ${fromHtml(sources, startFrom)}
           <div class="to-group">
             <div class="to-lbl">Move to</div>
@@ -397,16 +410,20 @@
           f.onsubmit = (e) => {
             e.preventDefault();
             const fr = from(), l = readPick(f, 'loc'), o = readPick(f, 'own'), n = qty();
+            if (readPick(f, 'who') == null) { toast(WHO_MSG); return; }
             if (!fr) { toast('Choose where it comes from'); return; }
             if (l == null) { toast('Choose or type where it goes'); return; }
             if (o == null) { toast('Choose or type an owner'); return; }
+            const person = readPick(f, 'who');
+            if (person == null) { toast(WHO_MSG); return; }
             if (fr.location === l && fr.owner === o) { toast('Pick a different location or owner to move to'); return; }
             if (n < 1) { toast('Enter a quantity of 1 or more'); return; }
             if (n > fr.qty) { toast(`Only ${fr.qty} at ${placeLabel(fr.location, fr.owner)}`); f.elements.qty.value = Math.max(1, fr.qty); draw(); return; }
             const d = readDate(f, today, entry, startDate);
             if (!d) return;
+            if (!entry) lastPerson.set(person);
             close();
-            resolve({ kind: 'move', qty: n, ...d, note: f.elements.note.value, location: fr.location, owner: fr.owner, toLocation: l, toOwner: o });
+            resolve({ kind: 'move', qty: n, ...d, note: f.elements.note.value, location: fr.location, owner: fr.owner, toLocation: l, toOwner: o, person });
           };
         });
     });
@@ -414,7 +431,7 @@
 
   /** Correct the count at one place. */
   async function countSheet(product) {
-    const [project, moves] = await Promise.all([DB.getProject(product.projectId), DB.listMovements(product.id)]);
+    const [project, moves, people] = await Promise.all([DB.getProject(product.projectId), DB.listMovements(product.id), DB.listPeople()]);
     const buckets = DB.bucketsOf(moves);
     const held = buckets.filter(b => b.qty > 0);
     const one = held.length === 1 ? held[0] : null;
@@ -423,6 +440,7 @@
       sheet(`<h3>Correct stock count</h3>
         <p class="desc" style="margin-top:-8px">${esc(productName(product))}. Enter what is actually there for one location and owner.</p>
         <form class="move-form">
+          ${personHtml(people)}
           ${pickHtml('loc', 'Location', project.locations || [], one ? one.location : hasUnsetLoc && !(project.locations || []).length ? '' : null, 'location')}
           ${pickHtml('own', 'Owner', project.owners || [], one ? one.owner : hasUnsetOwn && !(project.owners || []).length ? '' : null, 'owner')}
           ${qtyHtml('Actual count here', one ? one.qty : 0, 0)}
@@ -456,8 +474,11 @@
             if (l == null) { toast('Choose or type a location'); return; }
             if (o == null) { toast('Choose or type an owner'); return; }
             if (n < 0) { toast('Enter 0 or more'); return; }
+            const person = readPick(f, 'who');
+            if (person == null) { toast(WHO_MSG); return; }
+            lastPerson.set(person);
             close();
-            resolve({ location: l, owner: o, count: n });
+            resolve({ location: l, owner: o, person, count: n });
           };
         });
     });
@@ -476,6 +497,7 @@
         <dt>Date</dt><dd>${esc(fmtWhen(m.at, m.dateOnly))}</dd>
         ${isMove ? `<dt>From</dt><dd>${placeHtml(m.location, m.owner)}</dd><dt>To</dt><dd>${placeHtml(m.toLocation, m.toOwner)}</dd>`
           : `<dt>Location</dt><dd>${nameHtml(m.location)}</dd><dt>Owner</dt><dd>${nameHtml(m.owner)}</dd>`}
+        <dt>Who</dt><dd>${nameHtml(m.person)}</dd>
         <dt>Total</dt><dd>${before} → ${after}</dd>
         <dt>Note</dt><dd>${m.note ? esc(m.note) : '<span class="muted">None</span>'}</dd>
       </dl>
@@ -489,6 +511,7 @@
           if ((e.owner || '') !== (next.owner || '')) diffs.push(`${isMove ? 'from ' : ''}owner ${esc(e.owner || NOT_SET)} → ${esc(next.owner || NOT_SET)}`);
           if (isMove && (e.toLocation || '') !== (next.toLocation || '')) diffs.push(`to location ${esc(e.toLocation || NOT_SET)} → ${esc(next.toLocation || NOT_SET)}`);
           if (isMove && (e.toOwner || '') !== (next.toOwner || '')) diffs.push(`to owner ${esc(e.toOwner || NOT_SET)} → ${esc(next.toOwner || NOT_SET)}`);
+          if ((e.person || '') !== (next.person || '')) diffs.push(`who ${esc(e.person || NOT_SET)} → ${esc(next.person || NOT_SET)}`);
           if ((e.note || '') !== (next.note || '')) diffs.push(`note “${esc(e.note || '')}” → “${esc(next.note || '')}”`);
           return `<li><span class="muted">${esc(fmtWhen(e.editedAt))}:</span> ${diffs.join('; ') || 'no change'}</li>`;
         }).join('')}</ul>` : ''}
@@ -554,6 +577,10 @@
     const projects = await DB.listProjects();
     const frag = h(`<div>
       ${backupBannerHtml(projects.length > 0)}
+      ${projects.length ? `<a class="card row report-link" href="#/reports">
+          <div class="proj-icon rep-icon">${ICON.chart}</div>
+          <div class="grow"><div class="t">Reports</div><div class="s">Added, used and by whom, for any dates</div></div>${ICON.chev}
+        </a>` : ''}
       ${projects.length ? `<div class="list">${projects.map(p => `
         <a class="card row" href="#/p/${p.id}">
           <div class="proj-icon">${esc((p.name.trim()[0] || '?').toUpperCase())}</div>
@@ -580,6 +607,7 @@
     setChrome({
       title: project.name, back: '#/',
       menu: () => menuSheet(project.name, [
+        { label: 'Reports', run: () => { repState.proj = id; repState.prod = ALL; saveRep(); go('#/reports'); } },
         { label: 'Locations and owners', run: () => go(`#/p/${id}/places`) },
         { label: 'Export to spreadsheet (CSV)', run: () => exportSheet(id) },
         { label: 'Rename project', run: async () => {
@@ -638,7 +666,7 @@
     const existing = productId ? await DB.getProduct(productId) : null;
     if (productId && !existing) return notFound();
     projectId = projectId || existing.projectId;
-    const project = await DB.getProject(projectId);
+    const [project, people] = await Promise.all([DB.getProject(projectId), DB.listPeople()]);
     if (!project) return notFound();
     setChrome({ title: existing ? 'Edit product' : 'New product', back: existing ? `#/i/${productId}` : `#/p/${projectId}` });
 
@@ -669,6 +697,7 @@
           <button type="button" class="qbtn plus" data-s="1">+</button>
         </div></label>
         <div id="startPlace" hidden>
+          ${personHtml(people)}
           ${pickHtml('loc', 'Location', project.locations || [], startLoc, 'location')}
           ${pickHtml('own', 'Owner', project.owners || [], startOwner, 'owner')}
         </div>`}
@@ -725,16 +754,18 @@
       const lowStockAt = lowRaw === '' ? null : parseInt(lowRaw, 10);
       if (lowRaw !== '' && (isNaN(lowStockAt) || lowStockAt < 0)) { toast('Low-stock warning must be 0 or more'); return; }
       const initialStock = existing ? undefined : Math.max(0, parseInt(form.elements.initialStock.value, 10) || 0);
-      let location, owner;
+      let location, owner, person;
       if (initialStock > 0) {
-        location = readPick(form, 'loc'); owner = readPick(form, 'own');
+        location = readPick(form, 'loc'); owner = readPick(form, 'own'); person = readPick(form, 'who');
+        if (person == null) { toast('Choose or type who is adding the starting stock'); return; }
         if (location == null) { toast('Choose or type a location for the starting stock'); return; }
         if (owner == null) { toast('Choose or type an owner for the starting stock'); return; }
         lastPlace.set(projectId, { location, owner });
+        lastPerson.set(person);
       }
       const rec = await DB.saveProduct({
         id: existing?.id, projectId, partNumber, description, photo: photo ?? null,
-        initialStock, location, owner, lowStockAt,
+        initialStock, location, owner, person, lowStockAt,
       });
       toast(existing ? 'Saved' : 'Product added');
       goBack(existing ? `#/i/${rec.id}` : `#/p/${projectId}`);
@@ -799,6 +830,7 @@
             <div class="what">${moveLabel(m)} ${m.kind === 'move' ? m.qty : Math.abs(m.delta)}${m.editedAt ? ' <span class="tag">edited</span>' : ''}</div>
             <div class="when">${esc(fmtWhen(m.at, m.dateOnly))}</div>
             <div class="where">${entryPlaceHtml(m)}</div>
+            ${m.person ? `<div class="who">By ${esc(m.person)}</div>` : ''}
             ${m.note ? `<div class="note">${esc(m.note)}</div>` : ''}
           </div>
           <div class="bal" aria-label="Stock before and after">${before} → <b>${after}</b></div>
@@ -926,7 +958,7 @@
     const createdAt = new Date().toISOString();
     const out = {
       app: BACKUP_APP, format: BACKUP_FORMAT, version: APP_VERSION, build: APP_BUILD, createdAt,
-      counts: countsOf(data), data: { projects: data.projects, products, movements: data.movements },
+      counts: countsOf(data), data: { projects: data.projects, products, movements: data.movements, people: data.people },
     };
     const file = new File([JSON.stringify(out)], `inventory-backup-${toDateInput()}.json`, { type: 'application/json' });
     return { file, counts: out.counts };
@@ -994,7 +1026,7 @@
     try { obj = JSON.parse(await file.text()); } catch { throw new Error("This isn't a Simple Inventory backup file."); }
     if (!obj || obj.app !== BACKUP_APP || !obj.data) throw new Error("This isn't a Simple Inventory backup file.");
     if (obj.format > BACKUP_FORMAT || obj.build > APP_BUILD) throw new Error(`This backup was made by a newer version (${obj.version} build ${obj.build}). Update the app first: close it fully and open it again.`);
-    const { projects, products, movements } = obj.data;
+    const { projects, products, movements, people } = obj.data;
     const ok = Array.isArray(projects) && Array.isArray(products) && Array.isArray(movements)
       && projects.every(p => p && p.id && typeof p.name === 'string')
       && products.every(p => p && p.id && p.projectId)
@@ -1005,6 +1037,7 @@
       products: products.map(p => ({ ...p, photo: typeof p.photo === 'string' ? dataUrlToBlob(p.photo) : null })),
       movements,
     };
+    if (Array.isArray(people)) data.people = people.filter(n => typeof n === 'string');
     return { createdAt: obj.createdAt, version: obj.version, build: obj.build, data, counts: countsOf(data) };
   }
 
@@ -1282,7 +1315,7 @@
       files.push(csvFile(`inventory-stock-${tag}-${toDateInput()}.csv`, rows));
     }
     if (which !== 'stock') {
-      const rows = [['Date', 'Time', 'Project', 'Part number', 'Description', 'Type', 'Quantity', 'Location', 'Owner', 'Moved to location', 'Moved to owner', 'Product total after', 'Note', 'Edited']];
+      const rows = [['Date', 'Time', 'Project', 'Part number', 'Description', 'Type', 'Quantity', 'Location', 'Owner', 'Moved to location', 'Moved to owner', 'Who', 'Product total after', 'Note', 'Edited']];
       const all = [];
       for (const p of products) {
         let run = 0;
@@ -1294,7 +1327,7 @@
         const mv = m.kind === 'move';
         rows.push([toDateInput(d), m.dateOnly ? '' : hhmm(d), pName[p.projectId], p.partNumber || '', p.description || '',
           kindWord(m), mv ? m.qty : m.delta, orName(m.location), orName(m.owner),
-          mv ? orName(m.toLocation) : '', mv ? orName(m.toOwner) : '', after, m.note || '', m.edits?.length ? 'Yes' : '']);
+          mv ? orName(m.toLocation) : '', mv ? orName(m.toOwner) : '', orName(m.person), after, m.note || '', m.edits?.length ? 'Yes' : '']);
       }
       files.push(csvFile(`inventory-history-${tag}-${toDateInput()}.csv`, rows));
     }
@@ -1337,6 +1370,337 @@
       });
   }
 
+  // ---------- people (1.6) ----------
+  async function viewPeople() {
+    setChrome({ title: 'People', back: '#/settings' });
+    const people = await DB.listPeople();
+    const frag = h(`<div>
+      <p class="desc">Names to pick under <b>Who</b> when you add, remove, move or count stock. Reports show how much each person added and used. This list is for the whole app, not one project.</p>
+      ${people.length ? `<div class="card namelist">${people.map((n, i) => `
+        <div class="name-row"><span class="grow">${esc(n)}</span>
+          <button class="link-btn" data-i="${i}" data-a="ren">Rename</button>
+          <button class="link-btn danger" data-i="${i}" data-a="rm">Remove</button></div>`).join('')}</div>`
+      : `<div class="card banner">No names yet. Add one here, or choose <b>+ New person…</b> on the Add or Remove form.</div>`}
+      <button class="btn wide" data-a="add">+ Add person</button>
+    </div>`);
+    frag.querySelectorAll('[data-a]').forEach(b => b.onclick = async () => {
+      const name = people[+b.dataset.i];
+      if (b.dataset.a === 'add') {
+        const v = await textSheet('New person', { placeholder: 'Name, e.g. Sam R.', label: 'Add' });
+        if (v) { await DB.addPerson(v); render(); }
+      } else if (b.dataset.a === 'ren') {
+        const v = await textSheet('Rename person', { value: name });
+        if (v && v !== name) {
+          await DB.renamePerson(name, v);
+          if (lastPerson.get() === name) lastPerson.set(v);
+          toast('Renamed on every entry'); render();
+        }
+      } else if (await confirmSheet(`Remove “${name}”?`, `They won't be offered for new entries. History already recorded with their name stays as it is.`, 'Remove')) {
+        await DB.removePerson(name); render();
+      }
+    });
+    return frag;
+  }
+
+  // ---------- reports (1.6) ----------
+  // A report covers a date range (inclusive, by the phone's local date) for one project
+  // or all, optionally narrowed to one location, owner, person or product. Each entry is
+  // split into "legs" per place: a move is a leg out of one place and a leg into another,
+  // so totals per location/owner come out right. Start = stock before the first day,
+  // End = stock at the end of the last day (for the places picked).
+  const ALL = '__all';
+  const PERIODS = [
+    ['week', 'This week'], ['lastweek', 'Last week'], ['month', 'This month'],
+    ['lastmonth', 'Last month'], ['30', 'Last 30 days'], ['custom', 'Custom'],
+  ];
+  const repState = (() => {
+    let saved = {};
+    try { saved = JSON.parse(ss.get('report')) || {}; } catch {}
+    return { proj: '', period: 'month', from: '', to: '', loc: ALL, own: ALL, who: ALL, prod: ALL, ...saved };
+  })();
+  const saveRep = () => ss.set('report', JSON.stringify(repState));
+
+  function periodRange(key) {
+    const t = new Date(); t.setHours(12, 0, 0, 0);
+    const day = (d, n) => { const x = new Date(d); x.setDate(x.getDate() + n); return x; };
+    const monday = day(t, -((t.getDay() + 6) % 7));
+    switch (key) {
+      case 'week': return [toDateInput(monday), toDateInput(t)];
+      case 'lastweek': return [toDateInput(day(monday, -7)), toDateInput(day(monday, -1))];
+      case 'lastmonth': return [toDateInput(new Date(t.getFullYear(), t.getMonth() - 1, 1, 12)), toDateInput(new Date(t.getFullYear(), t.getMonth(), 0, 12))];
+      case '30': return [toDateInput(day(t, -29)), toDateInput(t)];
+      default: return [toDateInput(new Date(t.getFullYear(), t.getMonth(), 1, 12)), toDateInput(t)];
+    }
+  }
+  const fmtDay = (ymd) => new Date(`${ymd}T12:00:00`).toLocaleDateString([], { month: 'short', day: 'numeric', year: 'numeric' });
+
+  const legsOf = (m) => m.kind === 'move'
+    ? [{ l: m.location || '', o: m.owner || '', q: -m.qty, type: 'moveOut' }, { l: m.toLocation || '', o: m.toOwner || '', q: m.qty, type: 'moveIn' }]
+    : [{ l: m.location || '', o: m.owner || '', q: m.delta, type: m.kind === 'count' ? 'count' : m.delta > 0 ? 'in' : 'out' }];
+  const newAcc = () => ({ start: 0, added: 0, used: 0, count: 0, movedIn: 0, movedOut: 0, end: 0, entries: 0, lastUsed: null, _e: new Set() });
+  function addLeg(a, leg, m) {
+    if (leg.type === 'in') a.added += leg.q;
+    else if (leg.type === 'out') { a.used -= leg.q; if (!a.lastUsed || m.at > a.lastUsed.at) a.lastUsed = m; }
+    else if (leg.type === 'count') a.count += leg.q;
+    else if (leg.type === 'moveIn') a.movedIn += leg.q;
+    else a.movedOut -= leg.q;
+    a._e.add(m.id); a.entries = a._e.size;
+  }
+
+  /** Builds the report from all data. Returns everything the screen and the CSV need. */
+  async function buildReport(st) {
+    const data = await DB.exportAll();
+    const nat = (a, b) => (a || '').localeCompare(b || '', undefined, { numeric: true, sensitivity: 'base' });
+    const projects = data.projects.filter(p => !st.proj || p.id === st.proj);
+    const pName = Object.fromEntries(projects.map(p => [p.id, p.name]));
+    const allProducts = data.products.filter(p => pName[p.projectId] != null)
+      .sort((a, b) => nat(pName[a.projectId], pName[b.projectId]) || nat(a.partNumber, b.partNumber) || nat(a.description, b.description));
+    const products = allProducts.filter(p => st.prod === ALL || p.id === st.prod);
+    const pById = Object.fromEntries(products.map(p => [p.id, p]));
+    const moves = data.movements.filter(m => pById[m.productId])
+      .sort((a, b) => a.at.localeCompare(b.at) || a.createdAt.localeCompare(b.createdAt));
+    // pick lists for the filters, from the projects in scope and their entries
+    const lists = { locations: new Set(), owners: new Set(), people: new Set(data.people || []) };
+    for (const p of projects) { (p.locations || []).forEach(n => lists.locations.add(n)); (p.owners || []).forEach(n => lists.owners.add(n)); }
+    for (const m of data.movements) if (pName[m.projectId] != null) {
+      for (const g of legsOf(m)) { lists.locations.add(g.l); lists.owners.add(g.o); }
+      lists.people.add(m.person || '');
+    }
+
+    const { from, to } = st;
+    const placeOk = (g) => (st.loc === ALL || g.l === st.loc) && (st.own === ALL || g.o === st.own);
+    const whoOk = (m) => st.who === ALL || (m.person || '') === st.who;
+    const total = newAcc(), byProd = new Map(), byLoc = new Map(), byOwn = new Map(), byWho = new Map(), byNote = new Map();
+    const acc = (map, k) => { if (!map.has(k)) map.set(k, newAcc()); return map.get(k); };
+    const entries = [];
+    for (const m of moves) {
+      const d = toDateInput(new Date(m.at));
+      if (d > to) continue;
+      const legs = legsOf(m).filter(placeOk);
+      if (!legs.length) continue;
+      const inRange = d >= from && whoOk(m);
+      for (const g of legs) {
+        const targets = [total, acc(byProd, m.productId), acc(byLoc, g.l), acc(byOwn, g.o)];
+        for (const a of targets) { a.end += g.q; if (d < from) a.start += g.q; }
+        if (!inRange) continue;
+        for (const a of targets) addLeg(a, g, m);
+        addLeg(acc(byWho, m.person || ''), g, m);
+        if (m.note) addLeg(acc(byNote, m.note.trim()), g, m);
+      }
+      if (inRange) entries.push(m);
+    }
+    // keep rows that had activity, or hold stock (unless a person filter is on)
+    const keep = (a) => a.entries > 0 || (st.who === ALL && (a.start || a.end));
+    const sortNames = (map) => [...map].filter(([, a]) => keep(a)).sort((x, y) => (x[0] === '') - (y[0] === '') || nat(x[0], y[0]));
+    return {
+      pName, pById, products, allProducts, lists, entries: entries.reverse(), total,
+      byProd: products.filter(p => byProd.has(p.id) && keep(byProd.get(p.id))).map(p => [p, byProd.get(p.id)]),
+      byLoc: sortNames(byLoc), byOwn: sortNames(byOwn),
+      byWho: [...byWho].filter(([, a]) => a.entries).sort((x, y) => (x[0] === '') - (y[0] === '') || nat(x[0], y[0])),
+      byNote: [...byNote].sort((x, y) => (y[1].used - x[1].used) || (y[1].added - x[1].added) || nat(x[0], y[0])),
+    };
+  }
+
+  const nEntries = (n) => `${n} ${n === 1 ? 'entry' : 'entries'}`;
+  const numCell = (lbl, n, cls = '') => `<div class="${cls}"><span>${lbl}</span><b>${n}</b></div>`;
+  const plusN = (n) => n ? `+${n}` : '0';
+  const minusN = (n) => n ? `−${n}` : '0';
+  /** Count corrections and moves under the numbers. split: show moves in and out
+   *  separately (locations and owners); otherwise a move inside the group is one line. */
+  function extrasHtml(a, split = false) {
+    const x = [];
+    if (a.count) x.push(`Count corrections ${signed(a.count)}`);
+    if (!split && a.movedIn && a.movedIn === a.movedOut) x.push(`Moved ${a.movedIn} between places`);
+    else {
+      if (a.movedIn) x.push(`Moved in ${a.movedIn}`);
+      if (a.movedOut) x.push(`Moved out ${a.movedOut}`);
+    }
+    return x.length ? `<div class="rg-extra">${x.join(' · ')}</div>` : '';
+  }
+  function groupHtml(name, a, { showStock, sub = '', last = false, split = false }) {
+    return `<div class="card rgroup">
+      <div class="rg-name">${name}</div>${sub ? `<div class="rg-sub">${sub}</div>` : ''}
+      <div class="rnums ${showStock ? '' : 'two'}">
+        ${showStock ? numCell('Start', a.start) : ''}
+        ${numCell('Added', plusN(a.added), a.added ? 'in' : '')}
+        ${numCell('Used', minusN(a.used), a.used ? 'out' : '')}
+        ${showStock ? numCell('End', a.end) : ''}
+      </div>
+      ${extrasHtml(a, split)}
+      ${last && a.lastUsed ? `<div class="rg-extra">Last used ${esc(fmtWhen(a.lastUsed.at, a.lastUsed.dateOnly))}</div>` : ''}
+    </div>`;
+  }
+
+  async function viewReports() {
+    setChrome({ title: 'Reports', back: '#/' });
+    const projects = await DB.listProjects();
+    if (!projects.length) return h(`<div class="empty"><b>Nothing to report yet</b>Create a project and add some stock first.</div>`);
+    const st = repState;
+    if (st.proj && !projects.some(p => p.id === st.proj)) st.proj = '';
+    if (st.period !== 'custom' || !st.from || !st.to) [st.from, st.to] = periodRange(st.period === 'custom' ? 'month' : st.period);
+    if (st.from > st.to) [st.from, st.to] = [st.to, st.from];
+    let r = await buildReport(st);
+    // a filter whose name no longer exists in this scope goes back to All
+    let reset = false;
+    for (const [k, list] of [['loc', r.lists.locations], ['own', r.lists.owners], ['who', r.lists.people]]) if (st[k] !== ALL && !list.has(st[k])) { st[k] = ALL; reset = true; }
+    if (st.prod !== ALL && !r.allProducts.some(p => p.id === st.prod)) { st.prod = ALL; reset = true; }
+    if (reset) r = await buildReport(st);
+    saveRep();
+
+    const nat = (a, b) => a.localeCompare(b, undefined, { numeric: true, sensitivity: 'base' });
+    const opts = (set, cur) => [...set].sort((a, b) => (a === '') - (b === '') || nat(a, b))
+      .map(n => `<option value="${esc(n)}" ${cur === n ? 'selected' : ''}>${esc(n || NOT_SET)}</option>`).join('');
+    const sel = (name, label, inner, cur) => `<label class="field"><span>${label}</span>
+      <select class="input" name="${name}"><option value="${ALL}" ${cur === ALL ? 'selected' : ''}>All</option>${inner}</select></label>`;
+    const projLabel = st.proj ? r.pName[st.proj] : 'All projects';
+    const filterBits = [
+      st.loc !== ALL && `Location: ${st.loc || NOT_SET}`, st.own !== ALL && `Owner: ${st.own || NOT_SET}`,
+      st.who !== ALL && `Who: ${st.who || NOT_SET}`, st.prod !== ALL && `Product: ${productName(r.pById[st.prod] || {})}`,
+    ].filter(Boolean);
+    const showStock = st.who === ALL;
+    const t = r.total;
+    const many = !st.proj;
+    const prodName = (p) => `${esc(productName(p))}${p.partNumber && p.description ? ` <span class="muted">${esc(p.description)}</span>` : ''}`;
+
+    const frag = h(`<div class="report">
+      <form class="card rfilters no-print" autocomplete="off">
+        <label class="field"><span>Project</span>
+          <select class="input" name="proj"><option value="">All projects</option>
+            ${projects.map(p => `<option value="${esc(p.id)}" ${p.id === st.proj ? 'selected' : ''}>${esc(p.name)}</option>`).join('')}
+          </select></label>
+        <div class="field"><span>Dates</span>
+          <div class="chips periods">${PERIODS.map(([k, l]) => `<button type="button" class="chip ${st.period === k ? 'on' : ''}" data-p="${k}">${l}</button>`).join('')}</div>
+          <div class="daterow">
+            <input class="input" type="date" name="from" value="${st.from}" max="${toDateInput()}" aria-label="From">
+            <span class="muted">to</span>
+            <input class="input" type="date" name="to" value="${st.to}" max="${toDateInput()}" aria-label="To">
+          </div>
+        </div>
+        <details class="more-filters" ${filterBits.length ? 'open' : ''}>
+          <summary>Filters${filterBits.length ? ` (${filterBits.length})` : ''}</summary>
+          ${sel('loc', 'Location', opts(r.lists.locations, st.loc), st.loc)}
+          ${sel('own', 'Owner', opts(r.lists.owners, st.own), st.own)}
+          ${sel('who', 'Who', opts(r.lists.people, st.who), st.who)}
+          ${sel('prod', 'Product', r.allProducts.map(p => `<option value="${esc(p.id)}" ${st.prod === p.id ? 'selected' : ''}>${esc(productName(p))}${many ? ` (${esc(r.pName[p.projectId])})` : ''}</option>`).join(''), st.prod)}
+          ${filterBits.length ? `<button type="button" class="link-btn" data-a="clear">Clear filters</button>` : ''}
+        </details>
+      </form>
+      <div class="actions no-print">
+        <button class="btn" data-a="pdf">Print / save PDF</button>
+        <button class="btn primary" data-a="csv">Share spreadsheet</button>
+      </div>
+
+      <div class="report-head">
+        <div class="rh-title">Inventory report · ${esc(projLabel)}</div>
+        <div class="rh-sub">${esc(fmtDay(st.from))} to ${esc(fmtDay(st.to))}${filterBits.length ? ` · ${esc(filterBits.join(' · '))}` : ''}</div>
+        <div class="rh-sub print-only">Made ${esc(fmtStamp(new Date().toISOString()))} with Simple Inventory</div>
+      </div>
+
+      <h2 class="section">Totals</h2>
+      <div class="card rgroup totals">
+        <div class="rnums ${showStock ? '' : 'two'}">
+          ${showStock ? numCell('Start', t.start) : ''}
+          ${numCell('Added', plusN(t.added), t.added ? 'in' : '')}
+          ${numCell('Used', minusN(t.used), t.used ? 'out' : '')}
+          ${showStock ? numCell('End', t.end) : ''}
+        </div>
+        ${extrasHtml(t)}
+        <div class="rg-extra">${nEntries(t.entries)} · ${plural(r.byProd.length, 'product')}</div>
+      </div>
+      ${showStock ? '' : `<p class="hint">Start and end stock are left out while a person is picked, because stock isn't owned by a person.</p>`}
+
+      ${t.entries || r.byProd.length ? `
+      <h2 class="section">By product</h2>
+      <div class="list">${r.byProd.map(([p, a]) => groupHtml(prodName(p), a, { showStock, sub: many ? esc(r.pName[p.projectId]) : '', last: true })).join('')}</div>
+
+      <h2 class="section">By location</h2>
+      <div class="list">${r.byLoc.map(([n, a]) => groupHtml(nameHtml(n), a, { showStock, split: true })).join('')}</div>
+
+      <h2 class="section">By owner</h2>
+      <div class="list">${r.byOwn.map(([n, a]) => groupHtml(nameHtml(n), a, { showStock, split: true })).join('')}</div>
+
+      <h2 class="section">By person</h2>
+      ${r.byWho.length ? `<div class="list">${r.byWho.map(([n, a]) => groupHtml(nameHtml(n), a, { showStock: false, sub: nEntries(a.entries) })).join('')}</div>`
+        : `<div class="card banner">No entries in these dates.</div>`}
+
+      <h2 class="section">By note</h2>
+      ${r.byNote.length ? `<div class="card rtable"><div class="rt-row rt-head"><span>Note</span><span>Added</span><span>Used</span></div>
+        ${r.byNote.map(([n, a]) => `<div class="rt-row"><span>${esc(n)}</span><span class="in-txt">${plusN(a.added)}</span><span class="out-txt">${minusN(a.used)}</span></div>`).join('')}</div>`
+        : `<div class="card banner">No notes on entries in these dates.</div>`}
+
+      <h2 class="section">Every entry (${r.entries.length})</h2>
+      ${r.entries.length ? `<ul class="card hist rentries">${r.entries.map(m => {
+        const p = r.pById[m.productId];
+        const mv = m.kind === 'move';
+        return `<li>
+          <div class="d ${mv ? 'mv' : m.delta > 0 ? 'in' : 'out'}">${mv ? `⇄${m.qty}` : signed(m.delta)}</div>
+          <div style="flex:1;min-width:0">
+            <div class="what">${moveLabel(m)} ${mv ? m.qty : Math.abs(m.delta)} · ${esc(productName(p))}</div>
+            <div class="when">${esc(fmtWhen(m.at, m.dateOnly))}${many ? ` · ${esc(r.pName[m.projectId])}` : ''}</div>
+            <div class="where">${entryPlaceHtml(m)}</div>
+            <div class="who">By ${nameHtml(m.person)}</div>
+            ${m.note ? `<div class="note">${esc(m.note)}</div>` : ''}
+          </div>
+        </li>`;
+      }).join('')}</ul>` : `<div class="card banner">No entries in these dates.</div>`}`
+      : `<div class="card empty" style="padding:24px">Nothing was added, used or in stock for these dates and filters.</div>`}
+    </div>`);
+
+    const f = frag.querySelector('form');
+    const redo = () => { saveRep(); render(); };
+    f.elements.proj.onchange = () => { st.proj = f.elements.proj.value; st.prod = ALL; redo(); };
+    frag.querySelectorAll('[data-p]').forEach(b => b.onclick = () => {
+      st.period = b.dataset.p;
+      if (st.period !== 'custom') [st.from, st.to] = periodRange(st.period);
+      redo();
+    });
+    for (const k of ['from', 'to']) f.elements[k].onchange = () => {
+      if (!f.elements[k].value) return;
+      st[k] = f.elements[k].value; st.period = 'custom'; redo();
+    };
+    for (const k of ['loc', 'own', 'who', 'prod']) f.elements[k].onchange = () => { st[k] = f.elements[k].value; redo(); };
+    const clr = f.querySelector('[data-a=clear]');
+    if (clr) clr.onclick = () => { st.loc = st.own = st.who = st.prod = ALL; redo(); };
+    frag.querySelector('[data-a=pdf]').onclick = () => {
+      try { window.print(); } catch { toast("This phone can't print from here. Try Share spreadsheet."); }
+    };
+    frag.querySelector('[data-a=csv]').onclick = () => {
+      const tag = `${st.proj ? slug(r.pName[st.proj]) : 'all-projects'}-${st.from}-to-${st.to}`;
+      fileReadySheet(reportCsvFiles(r, st, tag, projLabel, filterBits), {
+        title: 'Report ready',
+        desc: `${esc(projLabel)}, ${esc(fmtDay(st.from))} to ${esc(fmtDay(st.to))}. Two files: the summary and every entry. They open in Excel, Google Sheets or Numbers.`,
+        onSent: (how) => toast(how === 'saved' ? 'Saved to Downloads' : 'Shared'),
+      });
+    };
+    return frag;
+  }
+
+  function reportCsvFiles(r, st, tag, projLabel, filterBits) {
+    const head = ['Section', 'Name', 'Project', 'Start', 'Added', 'Used', 'Count corrections', 'Moved in', 'Moved out', 'End', 'Entries', 'Last used'];
+    const showStock = st.who === ALL;
+    const row = (sec, name, proj, a) => [sec, name, proj, showStock ? a.start : '', a.added, a.used, a.count, a.movedIn, a.movedOut,
+      showStock ? a.end : '', a.entries, a.lastUsed ? toDateInput(new Date(a.lastUsed.at)) : ''];
+    const sum = [
+      ['Inventory report', projLabel, `${st.from} to ${st.to}`, ...filterBits],
+      [],
+      head,
+      row('Totals', 'All', projLabel, r.total),
+      ...r.byProd.map(([p, a]) => row('Product', [p.partNumber, p.description].filter(Boolean).join(' · ') || 'Untitled', r.pName[p.projectId], a)),
+      ...r.byLoc.map(([n, a]) => row('Location', orName(n), '', a)),
+      ...r.byOwn.map(([n, a]) => row('Owner', orName(n), '', a)),
+      ...r.byWho.map(([n, a]) => row('Person', orName(n), '', { ...a, start: '', end: '' })),
+      ...r.byNote.map(([n, a]) => row('Note', n, '', { ...a, start: '', end: '' })),
+    ];
+    const ent = [['Date', 'Time', 'Project', 'Part number', 'Description', 'Type', 'Quantity', 'Location', 'Owner', 'Moved to location', 'Moved to owner', 'Who', 'Note', 'Edited']];
+    for (const m of r.entries.slice().reverse()) {
+      const p = r.pById[m.productId], d = new Date(m.at), mv = m.kind === 'move';
+      ent.push([toDateInput(d), m.dateOnly ? '' : hhmm(d), r.pName[m.projectId], p.partNumber || '', p.description || '', kindWord(m),
+        mv ? m.qty : m.delta, orName(m.location), orName(m.owner), mv ? orName(m.toLocation) : '', mv ? orName(m.toOwner) : '',
+        orName(m.person), m.note || '', m.edits?.length ? 'Yes' : '']);
+    }
+    return [csvFile(`inventory-report-${tag}.csv`, sum), csvFile(`inventory-report-entries-${tag}.csv`, ent)];
+  }
+
   /** Home screen nudge when there's data and no backup for REMIND_DAYS. */
   function backupBannerHtml(hasData) {
     if (!hasData || !backupPrefs.due()) return '';
@@ -1367,7 +1731,17 @@
     setChrome({ title: 'Settings', back: '#/' });
     const last = backupPrefs.last();
     const safe = await DB.beforeRestore().catch(() => null);
+    const people = await DB.listPeople().catch(() => []);
     const frag = h(`<div>
+      <h2 class="section">People and reports</h2>
+      <div class="list">
+        <a class="card row" href="#/settings/people">
+          <div class="grow"><div class="t">People</div><div class="s">${people.length ? `${esc(people.slice(0, 3).join(', '))}${people.length > 3 ? ` and ${people.length - 3} more` : ''}` : 'Names to pick under Who on Add, Remove and Move'}</div></div>${ICON.chev}
+        </a>
+        <a class="card row" href="#/reports">
+          <div class="grow"><div class="t">Reports</div><div class="s">Added, used and by whom, per product, location, owner and note</div></div>${ICON.chev}
+        </a>
+      </div>
       <h2 class="section">Backup and export</h2>
       <div class="list">
         <button class="card row" data-a="backup">
@@ -1453,6 +1827,8 @@
       ['Photos', 'Tap the photo box to use the camera, or <b>Choose from library</b> for a saved picture. To change a photo later, open the product, tap <b>⋮</b> › <b>Edit product</b>.'],
       ['Adding and removing stock', 'Tap a product to open it, then tap <b>+ Add</b> or <b>− Remove</b>. Pick the date (today is filled in), enter the quantity and, if you like, a note such as "10 for sections 15A". Add asks for the location and owner. Remove asks where the stock comes from and won\'t let you take more than that spot holds. The form shows the stock there and the total after the change. Notes you used recently appear under the note box: tap one to reuse it. Right after saving, tap <b>Undo</b> at the bottom if it was a mistake.'],
       ['Locations and owners', 'Stock is counted separately for each location (for example Bin A, Truck) and owner. The product page shows the total and how much is at each one. In the Add form, pick a location and owner, or choose <b>+ New location…</b> / <b>+ New owner…</b> to type a new one. To rename or remove names, open the project and tap <b>⋮</b> › <b>Locations and owners</b>. Renaming updates every entry in the project.'],
+      ['Who (people)', 'Add, Remove, Move and Correct stock count ask <b>Who</b> is doing it. Pick a name, or choose <b>+ New person…</b> to type one. The last name you picked is filled in next time. To rename or remove names, tap <b>⚙ Settings</b> › <b>People</b>. Renaming changes the name on every entry. Entries from before version 1.6 show Who as <b>Not set</b>; tap one in History and <b>Edit</b> it to fill it in.'],
+      ['Reports', 'Tap <b>Reports</b> on the Inventory screen, or open a project and tap <b>⋮</b> › <b>Reports</b>. Pick a project or All projects and the dates (This week, Last week, This month, Last month, Last 30 days, or type your own). Tap <b>Filters</b> to look at one location, owner, person or product. The report shows the totals added and used, then the same per product (with stock at the start and end, and when it was last used), per location, per owner, per person and per note, then every entry with its date, who and note. Tap <b>Print / save PDF</b> to print it or save it as a PDF (on iPhone, tap the Share button on the print screen), or <b>Share spreadsheet</b> for CSV files.'],
       ['Moving stock', 'To move stock between locations or owners (for example from Bin A to the truck), open the product and tap <b>⇄ Move</b>. Pick where it comes from, where it goes, and how many. The total stays the same and History shows one "Moved" entry.'],
       ['Low-stock warning', 'When adding a product, when adding or removing stock, or with <b>⋮</b> › <b>Edit product</b>, fill in <b>Low-stock warning</b>. When the total in stock is at or below that number, the product shows a red <b>Low</b> tag, the project shows how many items are low, and <b>Low stock only</b> above the product list shows just those.'],
       ['History', "Open a product to see every change, newest first: the date, whether it was added, removed or moved, the quantity, the location and owner, the total before → after, and the note."],
@@ -1523,6 +1899,8 @@
       else if (parts[0] === 'i' && parts[1]) node = await viewProduct(parts[1]);
       else if (parts[0] === 'settings' && parts[1] === 'new') node = viewWhatsNew();
       else if (parts[0] === 'settings' && parts[1] === 'help') node = viewHelp();
+      else if (parts[0] === 'reports') node = await viewReports();
+      else if (parts[0] === 'settings' && parts[1] === 'people') node = await viewPeople();
       else if (parts[0] === 'settings' && parts[1] === 'delete-items') node = await viewDeleteItems();
       else if (parts[0] === 'settings' && parts[1] === 'delete') node = await viewDeleteProjects();
       else if (parts[0] === 'settings') node = await viewSettings();

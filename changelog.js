@@ -4,6 +4,25 @@
  * to match (e.g. '1.1-build2'). Builds count up and never reset. */
 window.CHANGELOG = [
   {
+    version: '1.6', build: 7, date: '2026-11-22',
+    title: 'Reports and who did it',
+    changes: [
+      'New Reports button on the Inventory screen (also in each project under ⋮ › Reports, and in Settings).',
+      'Pick a project or All projects, and the dates: This week, Last week, This month, Last month, Last 30 days, or type your own start and end dates.',
+      'Tap Filters to look at just one location, owner, person or product.',
+      'Totals: how much was added and used in those dates, with the stock at the start and at the end.',
+      'By product: start, added, used and end for each product, plus when it was last used.',
+      'By location and By owner: the same numbers for each location and each owner. Moves and count corrections are shown under the numbers.',
+      'By person: how much each person added and used. By note: how much was added and used for each note (for example "sections 15A").',
+      'Every entry: each add, remove, move and count in those dates, with the date, location, owner, who and note.',
+      'Print / save PDF prints the report as a clean page, or saves it as a PDF to share. Share spreadsheet makes two CSV files: the summary and every entry.',
+      'New Who box on Add, Remove, Move, Correct stock count and the starting stock of a new product. Pick a name or choose "+ New person…" to type one. The last name you picked is filled in next time.',
+      'New People list in Settings to add, rename or remove names. Renaming changes the name on every entry in every project.',
+      'History shows who made each change, and the History spreadsheet export has a new Who column. Entries from before this update show Who as "Not set"; edit one to fill it in.',
+      'Backups now include the People list. Your existing products and History are kept exactly as they were.',
+    ],
+  },
+  {
     version: '1.5', build: 6, date: '2026-11-22',
     title: 'Delete inventory, projects or all data from Settings',
     changes: [

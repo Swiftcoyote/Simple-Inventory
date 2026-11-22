@@ -12,10 +12,14 @@
  *               past date, so only the date is meaningful), createdAt,
  *               editedAt + edits[] (earlier versions, oldest first; only once edited) }
  *               kind 'move': delta 0, qty moved from (location, owner) to (toLocation, toOwner).
+ *               person (1.6): who made the change, a name from the People list
+ *               ('' or missing = "Not set", e.g. entries before 1.6).
  *   meta      out-of-line keys. 'beforeRestore' = { savedAt, reason, data: { projects,
  *               products, movements } }: the safety copy, everything as it was just before
  *               the last restore (1.4) or delete (1.5). reason: 'restore' (or missing, from
  *               1.4), 'delete' (some projects) or 'deleteAll'. Only one copy is kept.
+ *               'people' (1.6) = [names]: the app-wide People list (Settings › People),
+ *               offered on Add, Remove, Move and Correct count. Backed up with the data.
  *
  * Stock is counted per place (location + owner): the sum of entries at that place.
  * Invariants: product.stock === sum(movement.delta) for that product, and no place
@@ -142,7 +146,8 @@ const DB = (() => {
     const db = await open();
     const tx = db.transaction([...DATA_STORES, 'meta'], 'readwrite');
     const [projects, products, movements] = await Promise.all(DATA_STORES.map(n => reqP(tx.objectStore(n).getAll())));
-    tx.objectStore('meta').put({ savedAt: now(), reason: 'delete', data: { projects, products, movements } }, 'beforeRestore');
+    const people = (await reqP(tx.objectStore('meta').get('people'))) || [];
+    tx.objectStore('meta').put({ savedAt: now(), reason: 'delete', data: { projects, products, movements, people } }, 'beforeRestore');
     for (const p of projects) if (dropProj.has(p.id)) tx.objectStore('projects').delete(p.id);
     for (const p of products) if (dropProj.has(p.projectId) || dropProd.has(p.id)) tx.objectStore('products').delete(p.id);
     for (const m of movements) if (dropProj.has(m.projectId) || dropProd.has(m.productId)) tx.objectStore('movements').delete(m.id);
@@ -228,6 +233,7 @@ const DB = (() => {
     const project = await reqP(prs.get(p.projectId));
     if (addNames(project, put)) prs.put(project);
     await done(tx);
+    await addPeople(put.map(m => m.person));
     return typeof r.value === 'function' ? r.value(p) : r.value;
   }
 
@@ -280,6 +286,50 @@ const DB = (() => {
     await done(tx);
   }
 
+  // ---------- people (1.6) ----------
+  // One app-wide list of names (meta 'people'), picked on Add, Remove, Move and Correct
+  // count so Reports can show who added and used stock. A name is added the first time
+  // it is used. Renaming changes it on every entry in every project.
+  const nameSort = (a, b) => a.localeCompare(b, undefined, { numeric: true, sensitivity: 'base' });
+  async function listPeople() { return ((await get('meta', 'people')) || []).slice(); }
+  async function addPeople(names) {
+    names = names.map(tidy).filter(Boolean);
+    if (!names.length) return;
+    const db = await open();
+    const tx = db.transaction('meta', 'readwrite');
+    const s = tx.objectStore('meta');
+    const list = (await reqP(s.get('people'))) || [];
+    let changed = false;
+    for (const n of names) if (!list.includes(n)) { list.push(n); changed = true; }
+    if (changed) s.put(list.sort(nameSort), 'people');
+    await done(tx);
+  }
+  const addPerson = (name) => addPeople([name]);
+  async function renamePerson(from, to) {
+    to = tidy(to);
+    if (!to || to === from) return;
+    const db = await open();
+    const tx = db.transaction(['meta', 'movements'], 'readwrite');
+    const s = tx.objectStore('meta'), ms = tx.objectStore('movements');
+    const list = ((await reqP(s.get('people'))) || []).map(n => n === from ? to : n);
+    s.put(list.filter((n, i) => list.indexOf(n) === i).sort(nameSort), 'people');
+    for (const m of await reqP(ms.getAll())) {
+      let hit = false;
+      if (m.person === from) { m.person = to; hit = true; }
+      for (const e of m.edits || []) if (e.person === from) { e.person = to; hit = true; }
+      if (hit) ms.put(m);
+    }
+    await done(tx);
+  }
+  /** Takes a name off the list. Entries that use it keep it. */
+  async function removePerson(name) {
+    const db = await open();
+    const tx = db.transaction('meta', 'readwrite');
+    const s = tx.objectStore('meta');
+    s.put(((await reqP(s.get('people'))) || []).filter(n => n !== name), 'people');
+    await done(tx);
+  }
+
   // ---------- products ----------
   async function listProducts(projectId) {
     const items = await getAll('products', 'projectId', projectId);
@@ -319,6 +369,7 @@ const DB = (() => {
           id: uid(), productId: rec.id, projectId: rec.projectId,
           delta: initial, kind: 'in', note: 'Initial stock', at: t, createdAt: t,
           location: (data.location || '').trim(), owner: (data.owner || '').trim(),
+          person: (data.person || '').trim(),
         };
         tx.objectStore('movements').put(m);
         const prs = tx.objectStore('projects');
@@ -327,6 +378,7 @@ const DB = (() => {
       }
     }
     await done(tx);
+    if (data.person) await addPeople([data.person]);
     return rec;
   }
 
@@ -360,12 +412,12 @@ const DB = (() => {
     return items.sort((a, b) => (b.at.localeCompare(a.at)) || b.createdAt.localeCompare(a.createdAt));
   }
 
-  const PLACE_FIELDS = ['location', 'owner', 'toLocation', 'toOwner'];
+  const PLACE_FIELDS = ['location', 'owner', 'toLocation', 'toOwner', 'person'];
   const tidy = (v) => (v || '').trim();
 
   /** Builds the stored fields of an entry from what a form returned. */
-  function entryFields({ kind, delta, qty, note, at, dateOnly, location, owner, toLocation, toOwner }) {
-    const f = { note: tidy(note), at: at || now(), location: tidy(location), owner: tidy(owner) };
+  function entryFields({ kind, delta, qty, note, at, dateOnly, location, owner, toLocation, toOwner, person }) {
+    const f = { note: tidy(note), at: at || now(), location: tidy(location), owner: tidy(owner), person: tidy(person) };
     if (kind === 'move') {
       Object.assign(f, { kind: 'move', delta: 0, qty: Math.trunc(qty), toLocation: tidy(toLocation), toOwner: tidy(toOwner) });
     } else {
@@ -392,14 +444,14 @@ const DB = (() => {
   }
 
   /** Sets the count at one place: records the difference as a 'count' entry. */
-  async function setCount({ productId, location, owner, count, note = 'Stock count correction' }) {
-    location = tidy(location); owner = tidy(owner);
+  async function setCount({ productId, location, owner, person, count, note = 'Stock count correction' }) {
+    location = tidy(location); owner = tidy(owner); person = tidy(person);
     let movement = null;
     const product = await change({ productId }, ({ p, moves }) => {
       const b = bucketsOf(moves).find(x => x.location === location && x.owner === owner);
       const delta = Math.trunc(count) - (b ? b.qty : 0);
       if (!delta) return { abort: true, value: p };
-      movement = { id: uid(), productId: p.id, projectId: p.projectId, delta, kind: 'count', note, at: now(), createdAt: now(), location, owner };
+      movement = { id: uid(), productId: p.id, projectId: p.projectId, delta, kind: 'count', note, at: now(), createdAt: now(), location, owner, person };
       return { put: [movement], value: (p2) => p2 };
     });
     return { product, movement };
@@ -464,24 +516,31 @@ const DB = (() => {
   /** Every project, product (photo as a Blob) and entry. */
   async function exportAll() {
     const db = await open();
-    const tx = db.transaction(DATA_STORES);
+    const tx = db.transaction([...DATA_STORES, 'meta']);
     const [projects, products, movements] = await Promise.all(DATA_STORES.map(n => reqP(tx.objectStore(n).getAll())));
-    return { projects, products, movements };
+    const people = (await reqP(tx.objectStore('meta').get('people'))) || [];
+    return { projects, products, movements, people };
   }
 
   /** Replaces everything with `data` in one transaction (all or nothing). What was there
    *  before is kept in meta 'beforeRestore', so the restore can be undone.
    *  Each product's stock is set from its entries, so the stock invariant holds.
    *  undo: true puts the safety copy back instead and then removes it.
-   *  reason is saved with the safety copy ('restore', or 'deleteAll' for Delete all data). */
+   *  reason is saved with the safety copy ('restore', or 'deleteAll' for Delete all data).
+   *  data.people (1.6) replaces the People list when given; older backups have none, so
+   *  the list is kept and any names on the restored entries are added to it. */
   async function replaceAll(data, { undo = false, reason = 'restore' } = {}) {
     const sums = {};
     for (const m of data.movements) sums[m.productId] = (sums[m.productId] || 0) + (m.delta || 0);
     const db = await open();
     const tx = db.transaction([...DATA_STORES, 'meta'], 'readwrite');
     const [projects, products, movements] = await Promise.all(DATA_STORES.map(n => reqP(tx.objectStore(n).getAll())));
+    const people = (await reqP(tx.objectStore('meta').get('people'))) || [];
     if (undo) tx.objectStore('meta').delete('beforeRestore');
-    else tx.objectStore('meta').put({ savedAt: now(), reason, data: { projects, products, movements } }, 'beforeRestore');
+    else tx.objectStore('meta').put({ savedAt: now(), reason, data: { projects, products, movements, people } }, 'beforeRestore');
+    const nextPeople = (Array.isArray(data.people) ? data.people : people).slice();
+    for (const m of data.movements) { const n = tidy(m.person); if (n && !nextPeople.includes(n)) nextPeople.push(n); }
+    tx.objectStore('meta').put(nextPeople.sort(nameSort), 'people');
     for (const n of DATA_STORES) tx.objectStore(n).clear();
     for (const p of data.projects) tx.objectStore('projects').put(p);
     for (const p of data.products) tx.objectStore('products').put({ ...p, stock: sums[p.id] || 0 });
@@ -491,7 +550,7 @@ const DB = (() => {
 
   /** Erases every project, product, photo and entry (settings in localStorage stay).
    *  A safety copy is kept first, like a restore, so it can be undone. */
-  const deleteAll = () => replaceAll({ projects: [], products: [], movements: [] }, { reason: 'deleteAll' });
+  const deleteAll = () => replaceAll({ projects: [], products: [], movements: [] }, { reason: 'deleteAll' }); // People list stays
 
   /** The safety copy from before the last restore or delete, or undefined. */
   const beforeRestore = () => get('meta', 'beforeRestore');
@@ -508,6 +567,7 @@ const DB = (() => {
     listProducts, getProduct, saveProduct, deleteProduct,
     listMovements, addMovement, setCount, updateMovement, updateMovementNote, deleteMovement, recentNotes, persist,
     bucketsOf, isLow, setLowStock, addName, renameName, removeName,
+    listPeople, addPerson, renamePerson, removePerson,
     exportAll, replaceAll, beforeRestore,
   };
 })();

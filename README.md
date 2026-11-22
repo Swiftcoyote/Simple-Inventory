@@ -26,6 +26,14 @@ A phone-first inventory tracker that works offline and installs to your home scr
   makes Stock and History CSV files for one project or all, with location and owner columns.
   A reminder shows on the home screen after 7 days without a backup (can be turned off).
 
+- **Who (people)**: Add, Remove, Move and Correct count ask who is doing it, from one app-wide
+  list (Settings › People, or "+ New person…" on the form). Saved on each entry as `person`.
+- **Reports** (Inventory screen, project ⋮, or Settings): pick a project or all and a date range
+  (quick picks or custom), optionally one location, owner, person or product. Shows totals,
+  then start/added/used/end per product, location and owner, added/used per person and per note,
+  and every entry. *Print / save PDF* uses the browser's print (print styles hide the controls);
+  *Share spreadsheet* makes a summary CSV and an entries CSV.
+
 All data is stored on the phone (IndexedDB). There is no server and no sync.
 
 ## Versions
@@ -56,7 +64,7 @@ When releasing:
 
 ## Data model
 See the comment at the top of `db.js`. Movements record `delta`, `kind` (`in`/`out`/`count`/`move`),
-`location`, `owner` (and `toLocation`/`toOwner` for moves), `note`, `at` (plus `dateOnly`, `editedAt`
+`location`, `owner` (and `toLocation`/`toOwner` for moves), `person` (1.6), `note`, `at` (plus `dateOnly`, `editedAt`
 and `edits` when used). Stock per place is the sum of entries there; `product.stock` is the total.
 This is what reports, CSV export and backup/restore read.
 
