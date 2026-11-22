@@ -353,3 +353,6 @@ button.card.row { width: 100%; text-align: left; font: inherit; color: inherit; 
 .del-bar .btn.wide { margin-top: 0; }
 .sheet p.hint { margin: 6px 2px 12px; text-align: center; }
 .sheet form label.desc { display: block; margin: 4px 0 8px; color: var(--text); }
+.group-head { margin: 14px 2px 6px; }
+.group-head h2.section { margin: 0; }
+.sel-bar + .del-group .group-head { margin-top: 4px; }

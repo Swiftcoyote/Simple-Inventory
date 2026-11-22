@@ -1097,6 +1097,86 @@
     return frag;
   }
 
+  async function viewDeleteItems() {
+    setChrome({ title: 'Delete inventory', back: '#/settings' });
+    const projects = (await DB.listProjects()).filter(p => p.items);
+    if (!projects.length) return h(`<div class="empty">${ICON.box}<b>No inventory</b>There are no products to delete.</div>`);
+    const nat = (a, b) => (a || '').localeCompare(b || '', undefined, { numeric: true, sensitivity: 'base' });
+    const groups = await Promise.all(projects.map(async p => ({ p,
+      items: (await DB.listProducts(p.id)).sort((a, b) => nat(a.partNumber, b.partNumber) || nat(a.description, b.description)) })));
+    const frag = h(`<div>
+      <p class="desc">Tick the products to delete. Their photos and History go with them. The projects, locations and owners stay.</p>
+      <div class="sel-bar"><span data-a="count">None selected</span></div>
+      ${groups.map(({ p, items }) => `<div class="del-group" data-p="${esc(p.id)}">
+        <div class="sel-bar group-head"><h2 class="section">${esc(p.name)}</h2><button type="button" class="link-btn" data-a="grp">Select all</button></div>
+        <div class="list">${items.map(it => `
+          <label class="card row check-row">
+            <input type="checkbox" class="check" value="${esc(it.id)}">
+            ${it.photo ? `<img class="thumb" alt="" src="${blobUrl(it.photo)}">` : `<div class="thumb">${ICON.box}</div>`}
+            <div class="grow"><div class="t">${esc(it.partNumber || 'No part number')}</div>
+              <div class="s">${esc(it.description || '')}${it.description ? ' · ' : ''}${it.stock} in stock</div></div>
+          </label>`).join('')}</div>
+      </div>`).join('')}
+      <div class="del-bar"><button class="btn out wide" data-a="del" disabled>Delete selected</button></div>
+    </div>`);
+    const boxes = [...frag.querySelectorAll('.check')];
+    const $count = frag.querySelector('[data-a=count]');
+    const $del = frag.querySelector('[data-a=del]');
+    const picked = () => boxes.filter(b => b.checked).map(b => b.value);
+    const update = () => {
+      const n = picked().length;
+      $count.textContent = n ? `${plural(n, 'product')} selected` : 'None selected';
+      $del.disabled = !n;
+      $del.textContent = n ? `Delete ${plural(n, 'product')}` : 'Delete selected';
+      boxes.forEach(b => b.closest('.check-row').classList.toggle('on', b.checked));
+      groupEls.forEach(g => {
+        const gb = [...g.querySelectorAll('.check')];
+        g.querySelector('[data-a=grp]').textContent = gb.every(b => b.checked) ? 'Clear all' : 'Select all';
+      });
+    };
+    const groupEls = [...frag.querySelectorAll('.del-group')];
+    groupEls.forEach(g => {
+      g.querySelector('[data-a=grp]').onclick = () => {
+        const gb = [...g.querySelectorAll('.check')];
+        const on = !gb.every(b => b.checked);
+        gb.forEach(b => b.checked = on); update();
+      };
+    });
+    boxes.forEach(b => b.onchange = update);
+    $del.onclick = () => deleteItemsSheet(picked());
+    return frag;
+  }
+
+  async function deleteItemsSheet(ids) {
+    if (!ids.length) return;
+    const data = await DB.exportAll();
+    const drop = new Set(ids);
+    const items = data.products.filter(p => drop.has(p.id));
+    const pName = Object.fromEntries(data.projects.map(p => [p.id, p.name]));
+    const entries = data.movements.filter(m => drop.has(m.productId)).length;
+    const photos = items.filter(p => p.photo).length;
+    const units = items.reduce((a, p) => a + p.stock, 0);
+    const n = items.length;
+    const shown = items.slice(0, 8);
+    sheet(`<h3>Delete ${n === 1 ? 'this product' : `these ${n} products`}?</h3>
+      <div class="file-list">${shown.map(p => `<div><span class="file-name">${esc(p.partNumber || 'No part number')}</span> · ${esc(pName[p.projectId] || '')}</div>`).join('')}${n > shown.length ? `<div>and ${n - shown.length} more</div>` : ''}</div>
+      <p class="desc warn-box">This deletes ${esc(plural(n, 'product'))} (${esc(plural(units, 'unit'))} in stock), ${entries} History ${entries === 1 ? 'entry' : 'entries'} and ${esc(plural(photos, 'photo'))} from this phone. The projects stay. A safety copy is kept, so you can undo this from Settings.</p>
+      <button class="btn wide" data-a="backup">Back up first</button>
+      <p class="desc hint">${backupLine()}</p>
+      <div class="actions"><button class="btn" data-a="no">Cancel</button><button class="btn out" data-a="ok">Delete</button></div>`,
+      (el, close) => {
+        el.querySelector('[data-a=no]').onclick = close;
+        el.querySelector('[data-a=backup]').onclick = backupNow;
+        el.querySelector('[data-a=ok]').onclick = async () => {
+          close();
+          try { await DB.deleteProducts(ids); }
+          catch (e) { console.error(e); toast('Could not delete. Nothing was changed.'); return; }
+          go('#/settings', true);
+          toast(n === 1 ? 'Product deleted' : `${n} products deleted`, [{ label: 'Undo', run: undoRestore }]);
+        };
+      });
+  }
+
   async function deleteProjectsSheet(ids) {
     if (!ids.length) return;
     const data = await DB.exportAll();
@@ -1309,6 +1389,9 @@
       </div>
       <h2 class="section">Delete data</h2>
       <div class="list">
+        <a class="card row" href="#/settings/delete-items">
+          <div class="grow"><div class="t danger-txt">Delete inventory</div><div class="s">Pick products to delete, with their photos and History. The projects stay.</div></div>${ICON.chev}
+        </a>
         <a class="card row" href="#/settings/delete">
           <div class="grow"><div class="t danger-txt">Delete projects</div><div class="s">Pick one or more projects to delete, with their products, photos and History</div></div>${ICON.chev}
         </a>
@@ -1365,7 +1448,7 @@
     setChrome({ title: 'Help', back: '#/settings' });
     const topics = [
       ['Projects', 'Each project keeps its own inventory. On the Inventory screen tap <b>New project</b>. Open a project and tap <b>⋮</b> to rename or delete it.'],
-      ['Deleting projects or all data', 'Tap <b>⚙ Settings</b> › <b>Delete projects</b>, tick the projects you want gone and tap <b>Delete</b>. To wipe everything, tap <b>Delete all data</b> and type <b>DELETE</b> to confirm. Both offer <b>Back up first</b>. A safety copy is kept, so if it was a mistake, tap <b>Undo</b> straight away or <b>Undo last delete</b> in Settings. Only the last restore or delete can be undone.'],
+      ['Deleting inventory, projects or all data', 'To delete products but keep their project, tap <b>⚙ Settings</b> › <b>Delete inventory</b>, tick the products (or <b>Select all</b> under a project) and tap <b>Delete</b>. To delete whole projects, tap <b>Delete projects</b>, tick the projects you want gone and tap <b>Delete</b>. To wipe everything, tap <b>Delete all data</b> and type <b>DELETE</b> to confirm. Both offer <b>Back up first</b>. A safety copy is kept, so if it was a mistake, tap <b>Undo</b> straight away or <b>Undo last delete</b> in Settings. Only the last restore or delete can be undone.'],
       ['Adding a product', 'Open a project and tap <b>Add product</b>. Tap the photo box to take a picture, enter the model/part number and a description, set the starting quantity, then tap <b>Add product</b>.'],
       ['Photos', 'Tap the photo box to use the camera, or <b>Choose from library</b> for a saved picture. To change a photo later, open the product, tap <b>⋮</b> › <b>Edit product</b>.'],
       ['Adding and removing stock', 'Tap a product to open it, then tap <b>+ Add</b> or <b>− Remove</b>. Pick the date (today is filled in), enter the quantity and, if you like, a note such as "10 for sections 15A". Add asks for the location and owner. Remove asks where the stock comes from and won\'t let you take more than that spot holds. The form shows the stock there and the total after the change. Notes you used recently appear under the note box: tap one to reuse it. Right after saving, tap <b>Undo</b> at the bottom if it was a mistake.'],
@@ -1440,6 +1523,7 @@
       else if (parts[0] === 'i' && parts[1]) node = await viewProduct(parts[1]);
       else if (parts[0] === 'settings' && parts[1] === 'new') node = viewWhatsNew();
       else if (parts[0] === 'settings' && parts[1] === 'help') node = viewHelp();
+      else if (parts[0] === 'settings' && parts[1] === 'delete-items') node = await viewDeleteItems();
       else if (parts[0] === 'settings' && parts[1] === 'delete') node = await viewDeleteProjects();
       else if (parts[0] === 'settings') node = await viewSettings();
       else node = await viewHome();

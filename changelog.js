@@ -5,9 +5,10 @@
 window.CHANGELOG = [
   {
     version: '1.5', build: 6, date: '2026-11-22',
-    title: 'Delete projects and all data from Settings',
+    title: 'Delete inventory, projects or all data from Settings',
     changes: [
       'New Delete data section in Settings (tap ⚙ on the Inventory screen).',
+      'Delete inventory: tick products (or Select all under a project) and tap Delete. Their photos and History go with them, and the projects stay. The confirm shows how many products, units, History entries and photos will go.',
       'Delete projects: tick one or more projects (or Select all) and tap Delete. The confirm lists the projects and how many products, History entries and photos go with them. You no longer have to open a project to delete it.',
       'Delete all data erases every project, product, photo and History entry on this phone. Type DELETE to unlock the button. Your settings, like the backup reminder, stay.',
       'Both offer Back up first and show when you last backed up.',

@@ -133,20 +133,23 @@ const DB = (() => {
     return rec;
   }
 
-  /** Deletes the given projects with all their products, photos and entries, in one
-   *  transaction. Everything as it was before is kept as the safety copy (meta
-   *  'beforeRestore', reason 'delete'), so Settings can undo it. */
-  async function deleteProjects(ids) {
-    const drop = new Set(ids);
+  /** Deletes whole projects (with all their products, photos and entries) and/or single
+   *  products (with their entries; the project stays), in one transaction. Everything as
+   *  it was before is kept as the safety copy (meta 'beforeRestore', reason 'delete'),
+   *  so Settings can undo it. */
+  async function deleteData({ projectIds = [], productIds = [] }) {
+    const dropProj = new Set(projectIds), dropProd = new Set(productIds);
     const db = await open();
     const tx = db.transaction([...DATA_STORES, 'meta'], 'readwrite');
     const [projects, products, movements] = await Promise.all(DATA_STORES.map(n => reqP(tx.objectStore(n).getAll())));
     tx.objectStore('meta').put({ savedAt: now(), reason: 'delete', data: { projects, products, movements } }, 'beforeRestore');
-    for (const p of projects) if (drop.has(p.id)) tx.objectStore('projects').delete(p.id);
-    for (const p of products) if (drop.has(p.projectId)) tx.objectStore('products').delete(p.id);
-    for (const m of movements) if (drop.has(m.projectId)) tx.objectStore('movements').delete(m.id);
+    for (const p of projects) if (dropProj.has(p.id)) tx.objectStore('projects').delete(p.id);
+    for (const p of products) if (dropProj.has(p.projectId) || dropProd.has(p.id)) tx.objectStore('products').delete(p.id);
+    for (const m of movements) if (dropProj.has(m.projectId) || dropProd.has(m.productId)) tx.objectStore('movements').delete(m.id);
     await done(tx);
   }
+  const deleteProjects = (ids) => deleteData({ projectIds: ids });
+  const deleteProducts = (ids) => deleteData({ productIds: ids });
   const deleteProject = (id) => deleteProjects([id]);
 
   // ---------- locations & owners ----------
@@ -501,7 +504,7 @@ const DB = (() => {
   }
 
   return {
-    open, listProjects, getProject, saveProject, deleteProject, deleteProjects, deleteAll,
+    open, listProjects, getProject, saveProject, deleteProject, deleteProjects, deleteProducts, deleteAll,
     listProducts, getProduct, saveProduct, deleteProduct,
     listMovements, addMovement, setCount, updateMovement, updateMovementNote, deleteMovement, recentNotes, persist,
     bucketsOf, isLow, setLowStock, addName, renameName, removeName,
