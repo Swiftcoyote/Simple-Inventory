@@ -15,6 +15,7 @@ window.CHANGELOG = [
       'History shows the location and owner of every entry. Edit an entry to change its location or owner as well as its date, quantity and note.',
       'Correct stock count now sets the count for one location and owner.',
       'New low-stock warning: when you add a product (or later with ⋮ › Edit product), enter the number to warn at. When the total is at or below it, the product gets a red "Low" tag and a red count.',
+      'The Add and Remove forms also have the low-stock warning field, filled in with the current level, so you can change it while adding or removing stock. Leave it as is to keep it.',
       'Each project on the Inventory screen shows how many products are low, and a "Low stock only" button above the product list shows just those.',
       'Your existing products and history are kept. Stock recorded before this update shows as location "Not set" and owner "Not set". Use ⇄ Move or Edit to sort it out whenever you like.',
     ],
