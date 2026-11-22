@@ -1,14 +1,17 @@
 /* Simple Inventory — UI. Vanilla JS, hash routing, no build step. */
 (() => {
-  // Release number shown on the home screen. Bump APP_VERSION for a new release
-  // and APP_BUILD for every upload; keep sw.js VERSION in step so phones update.
-  const APP_VERSION = '1.0';
-  const APP_BUILD = 1;
+  // Version and build come from the newest entry in changelog.js. For a release,
+  // add an entry there and bump VERSION in sw.js to match so phones update.
+  const RELEASES = window.CHANGELOG || [];
+  const APP_VERSION = RELEASES[0]?.version || '?';
+  const APP_BUILD = RELEASES[0]?.build || 0;
+  const COMMITS_URL = 'https://github.com/Swiftcoyote/Simple-Inventory/commits/main';
 
   const $view = document.getElementById('view');
   const $title = document.getElementById('title');
   const $back = document.getElementById('backBtn');
   const $menu = document.getElementById('menuBtn');
+  const $settings = document.getElementById('settingsBtn');
   const $sheetRoot = document.getElementById('sheetRoot');
   const $toast = document.getElementById('toast');
 
@@ -16,6 +19,10 @@
   const ss = {
     get: (k) => { try { return sessionStorage.getItem(k); } catch { return null; } },
     set: (k, v) => { try { sessionStorage.setItem(k, v); } catch {} },
+  };
+  const ls = {
+    get: (k) => { try { return localStorage.getItem(k); } catch { return null; } },
+    set: (k, v) => { try { localStorage.setItem(k, v); } catch {} },
   };
   const esc = (s) => String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
   const h = (html) => { const t = document.createElement('template'); t.innerHTML = html.trim(); return t.content; };
@@ -187,18 +194,20 @@
   }
 
   // ---------- chrome ----------
-  function setChrome({ title, back, menu }) {
+  function setChrome({ title, back, menu, settings }) {
     $title.textContent = title;
     document.title = title === 'Inventory' ? 'Simple Inventory' : `${title} · Inventory`;
     $back.hidden = !back;
     $back.onclick = back ? () => goBack(back) : null;
     $menu.hidden = !menu;
     $menu.onclick = menu || null;
+    $settings.hidden = !settings;
+    $settings.onclick = settings ? () => go('#/settings') : null;
   }
 
   // ---------- views ----------
   async function viewHome() {
-    setChrome({ title: 'Inventory' });
+    setChrome({ title: 'Inventory', settings: true });
     const projects = await DB.listProjects();
     const frag = h(`<div>
       ${projects.length ? `<div class="list">${projects.map(p => `
@@ -209,7 +218,7 @@
           ${ICON.chev}
         </a>`).join('')}</div>`
       : `<div class="empty">${ICON.box}<b>No projects yet</b>Create a project to start tracking its inventory.</div>`}
-      <p class="app-version">Simple Inventory · Version ${APP_VERSION} · Build ${APP_BUILD}</p>
+      <a class="app-version" href="#/settings/new">Simple Inventory · Version ${APP_VERSION} · Build ${APP_BUILD}<br><span>What's New</span></a>
       <button class="fab" id="newProj">${ICON.plus}New project</button>
     </div>`);
     frag.getElementById('newProj').onclick = async () => {
@@ -454,6 +463,93 @@
     return frag;
   }
 
+  // ---------- settings, what's new, help ----------
+  const verLabel = (r) => `Version ${esc(r.version)} · Build ${esc(r.build)}`;
+  const fmtDate = (d) => { const t = new Date(`${d}T12:00:00`); return isNaN(t) ? esc(d) : t.toLocaleDateString([], { month: 'long', day: 'numeric', year: 'numeric' }); };
+  const releaseHtml = (r, current) => `
+    <div class="card release">
+      <div class="rel-head">${verLabel(r)}${current ? ' <span class="pill">Current</span>' : ''}</div>
+      <div class="rel-sub">${esc(r.title || '')}${r.title && r.date ? ' · ' : ''}${r.date ? fmtDate(r.date) : ''}</div>
+      <ul class="changes">${r.changes.map(c => `<li>${esc(c)}</li>`).join('')}</ul>
+    </div>`;
+
+  function viewSettings() {
+    setChrome({ title: 'Settings', back: '#/' });
+    return h(`<div>
+      <h2 class="section">Updates</h2>
+      <div class="list">
+        <a class="card row" href="#/settings/new">
+          <div class="grow"><div class="t">What's New</div><div class="s">${verLabel(RELEASES[0] || { version: '?', build: '?' })} and earlier releases</div></div>${ICON.chev}
+        </a>
+      </div>
+      <h2 class="section">Help</h2>
+      <div class="list">
+        <a class="card row" href="#/settings/help">
+          <div class="grow"><div class="t">How to use the app</div><div class="s">Projects, products, photos, stock and updates</div></div>${ICON.chev}
+        </a>
+      </div>
+      <h2 class="section">About</h2>
+      <div class="card about">
+        <div class="t">Simple Inventory</div>
+        <div class="s">${verLabel(RELEASES[0] || { version: '?', build: '?' })}</div>
+        <div class="s">All data is stored only on this phone.</div>
+        <a class="btn primary" href="${COMMITS_URL}" target="_blank" rel="noopener">View all changes on GitHub</a>
+      </div>
+    </div>`);
+  }
+
+  function viewWhatsNew() {
+    setChrome({ title: "What's New", back: '#/settings' });
+    if (!RELEASES.length) return h(`<div class="empty">No release notes.</div>`);
+    const [cur, ...older] = RELEASES;
+    return h(`<div>
+      <h2 class="section">This update</h2>
+      ${releaseHtml(cur, true)}
+      ${older.length ? `<h2 class="section">Earlier releases</h2><div class="list">${older.map(r => releaseHtml(r)).join('')}</div>` : ''}
+      <a class="btn wide" href="${COMMITS_URL}" target="_blank" rel="noopener">View all changes on GitHub</a>
+    </div>`);
+  }
+
+  function viewHelp() {
+    setChrome({ title: 'Help', back: '#/settings' });
+    const topics = [
+      ['Projects', 'Each project keeps its own inventory. On the Inventory screen tap <b>New project</b>. Open a project and tap <b>⋮</b> to rename or delete it.'],
+      ['Adding a product', 'Open a project and tap <b>Add product</b>. Tap the photo box to take a picture, enter the model/part number and a description, set the starting quantity, then tap <b>Add product</b>.'],
+      ['Photos', 'Tap the photo box to use the camera, or <b>Choose from library</b> for a saved picture. To change a photo later, open the product, tap <b>⋮</b> › <b>Edit product</b>.'],
+      ['Adding and removing stock', 'For one at a time, tap <b>+</b> or <b>−</b> on the product list. The message at the bottom lets you <b>Undo</b> or add a <b>Note</b>. For more than one, open the product and tap <b>+ Add…</b> or <b>− Remove…</b> to enter a quantity, an optional note and the date and time.'],
+      ['History', "Open a product to see every change, newest first, with the stock count after each one. Tap an entry to edit its note or delete it (the stock is put back)."],
+      ['Correcting a count', 'If the count on the shelf is different, open the product, tap <b>⋮</b> › <b>Correct stock count</b> and enter the real number. The difference is saved in History as a "count" entry.'],
+      ['Searching', 'Inside a project, type in the search box to find products by part number or description.'],
+      ['Updates', "The app checks for updates whenever you open it. When one arrives, it refreshes once by itself and shows <b>What's New</b>. Your data is not affected. You can see the version and build here in Settings."],
+      ['Your data', 'Everything is stored only on this phone, and nothing is sent anywhere. Deleting the app or clearing the browser data for this site erases it.'],
+    ];
+    return h(`<div class="help">${topics.map(([t, b]) => `
+      <details class="card"><summary>${esc(t)}</summary><p>${b}</p></details>`).join('')}</div>`);
+  }
+
+  /** Popup after an update: every release newer than the build last seen on this phone. */
+  async function maybeShowWhatsNew() {
+    if (!RELEASES.length) return;
+    let seen = parseInt(ls.get('seenBuild'), 10);
+    if (isNaN(seen)) {
+      // No record yet. Phones that used build 1 (before this existed) already have
+      // projects, so show them the news; a brand-new install starts quietly.
+      const hasData = (await DB.listProjects().catch(() => [])).length > 0;
+      seen = hasData ? 1 : APP_BUILD;
+    }
+    ls.set('seenBuild', String(APP_BUILD));
+    const fresh = RELEASES.filter(r => r.build > seen);
+    if (!fresh.length || $sheetRoot.children.length) return;
+    sheet(`<h3>What's New</h3>
+      <p class="desc" style="margin-top:-8px">You're now on ${verLabel(RELEASES[0])}${fresh.length > 1 ? `. Here's everything from the ${fresh.length} updates you missed.` : '.'}</p>
+      <div class="whatsnew">${fresh.map((r, i) => releaseHtml(r, i === 0)).join('')}</div>
+      <div class="actions"><button class="btn" data-a="all">See all in Settings</button><button class="btn primary" data-a="ok">Got it</button></div>`,
+      (el, close) => {
+        el.querySelector('[data-a=ok]').onclick = close;
+        el.querySelector('[data-a=all]').onclick = () => { close(); go('#/settings/new'); };
+      });
+  }
+
   function notFound() {
     setChrome({ title: 'Not found', back: '#/' });
     return h(`<div class="empty"><b>Nothing here</b>This item may have been deleted.</div>`);
@@ -481,6 +577,9 @@
       else if (parts[0] === 'p' && parts[1]) node = await viewProject(parts[1]);
       else if (parts[0] === 'i' && parts[2] === 'edit') node = await viewProductForm(null, parts[1]);
       else if (parts[0] === 'i' && parts[1]) node = await viewProduct(parts[1]);
+      else if (parts[0] === 'settings' && parts[1] === 'new') node = viewWhatsNew();
+      else if (parts[0] === 'settings' && parts[1] === 'help') node = viewHelp();
+      else if (parts[0] === 'settings') node = viewSettings();
       else node = await viewHome();
     } catch (err) {
       console.error(err);
@@ -497,27 +596,47 @@
     urls = urls.filter(u => live.has(u) || (URL.revokeObjectURL(u), false));
   }
 
-  window.addEventListener('hashchange', () => { ss.set('nav', '1'); $sheetRoot.replaceChildren(); render(); });
+  window.addEventListener('hashchange', () => { ss.set('nav', '1'); $sheetRoot.replaceChildren(); render(); reloadIfUpdated(); });
   window.addEventListener('pageshow', (e) => { if (e.persisted) render(); });
 
   // ---------- boot ----------
-  DB.open().then(render).catch(err => {
+  DB.open().then(render).then(maybeShowWhatsNew).catch(err => {
     $view.replaceChildren(h(`<div class="empty"><b>Storage unavailable</b>${esc(err.message || err)}<br>Private browsing can block on-device storage.</div>`));
   });
   DB.persist();
 
   let canSW = false;
   try { canSW = 'serviceWorker' in navigator && window.isSecureContext && window.top === window; } catch {}
+  // ---------- updates ----------
+  // A new sw.js installs the new files and takes over right away (skipWaiting +
+  // clients.claim), which fires 'controllerchange'. We then reload once so the
+  // new app.js runs and shows What's New. The reload waits while the user is
+  // busy (a sheet is open, or the add/edit product form is on screen).
+  let updateReady = false, reloading = false;
+  const busy = () => $sheetRoot.children.length > 0 || /^#\/(p\/[^/]+\/new|i\/[^/]+\/edit)/.test(location.hash);
+  function reloadIfUpdated() {
+    if (!updateReady || reloading || busy()) return;
+    reloading = true;
+    location.reload();
+  }
+  // Re-check when a sheet closes (sheets are removed from #sheetRoot).
+  new MutationObserver(() => setTimeout(reloadIfUpdated, 300)).observe($sheetRoot, { childList: true });
+
   if (canSW) {
-    navigator.serviceWorker.register('sw.js').then(reg => {
-      reg.addEventListener('updatefound', () => {
-        const nw = reg.installing;
-        nw?.addEventListener('statechange', () => {
-          if (nw.state === 'installed' && navigator.serviceWorker.controller) {
-            toast('App updated', [{ label: 'Reload', run: () => location.reload() }]);
-          }
-        });
+    const hadController = !!navigator.serviceWorker.controller;
+    navigator.serviceWorker.addEventListener('controllerchange', () => {
+      if (!hadController) return;       // first install, not an update
+      updateReady = true;
+      reloadIfUpdated();
+    });
+    // updateViaCache:'none' makes the phone always fetch sw.js fresh, skipping the HTTP cache.
+    navigator.serviceWorker.register('sw.js', { updateViaCache: 'none' }).then(reg => {
+      const check = () => reg.update().catch(() => {});
+      document.addEventListener('visibilitychange', () => {
+        if (document.visibilityState === 'visible') check();
+        else reloadIfUpdated();       // safe moment: app is in the background
       });
+      window.addEventListener('online', check);
     }).catch(() => {});
   }
 })();

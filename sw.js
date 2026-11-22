@@ -1,14 +1,16 @@
 /* Offline support: cache the app shell, serve it cache-first (works with no signal).
- * Bump VERSION whenever any app file changes so phones pick up the update. */
-const VERSION = '1.0-build1';
+ * Bump VERSION whenever any app file changes so phones pick up the update.
+ * Files are fetched with cache:'reload' so a new version never picks up stale
+ * copies from the browser's HTTP cache (GitHub Pages caches files for 10 min). */
+const VERSION = '1.1-build2';
 const CACHE = `inventory-${VERSION}`;
 const SHELL = [
-  './', 'index.html', 'styles.css', 'db.js', 'app.js', 'manifest.webmanifest',
+  './', 'index.html', 'styles.css', 'changelog.js', 'db.js', 'app.js', 'manifest.webmanifest',
   'icons/icon-192.png', 'icons/icon-512.png', 'icons/maskable-512.png', 'icons/apple-touch-icon.png',
 ];
 
 self.addEventListener('install', (e) => {
-  e.waitUntil(caches.open(CACHE).then(c => c.addAll(SHELL)).then(() => self.skipWaiting()));
+  e.waitUntil(caches.open(CACHE).then(c => c.addAll(SHELL.map(u => new Request(u, { cache: 'reload' })))).then(() => self.skipWaiting()));
 });
 
 self.addEventListener('activate', (e) => {
