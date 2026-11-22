@@ -4,6 +4,19 @@
  * to match (e.g. '1.1-build2'). Builds count up and never reset. */
 window.CHANGELOG = [
   {
+    version: '1.5', build: 6, date: '2026-11-22',
+    title: 'Delete inventory, projects or all data from Settings',
+    changes: [
+      'New Delete data section in Settings (tap ⚙ on the Inventory screen).',
+      'Delete inventory: tick products (or Select all under a project) and tap Delete. Their photos and History go with them, and the projects stay. The confirm shows how many products, units, History entries and photos will go.',
+      'Delete projects: tick one or more projects (or Select all) and tap Delete. The confirm lists the projects and how many products, History entries and photos go with them. You no longer have to open a project to delete it.',
+      'Delete all data erases every project, product, photo and History entry on this phone. Type DELETE to unlock the button. Your settings, like the backup reminder, stay.',
+      'Both offer Back up first and show when you last backed up.',
+      'Before any delete, the app keeps a safety copy. Tap Undo on the message that appears, or Undo last delete in Settings, to put everything back. Only the last restore or delete can be undone.',
+      'Deleting a project from inside it (⋮ › Delete project) keeps a safety copy too, so it can also be undone.',
+    ],
+  },
+  {
     version: '1.4', build: 5, date: '2026-11-22',
     title: 'Backup, restore and spreadsheet export',
     changes: [

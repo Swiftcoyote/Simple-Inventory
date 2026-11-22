@@ -587,8 +587,9 @@
           if (name) { await DB.saveProject({ id, name }); render(); }
         } },
         { label: 'Delete project', danger: true, run: async () => {
-          if (await confirmSheet('Delete project?', `"${project.name}" and all its products and history will be permanently deleted from this phone.`)) {
+          if (await confirmSheet('Delete project?', `"${project.name}" and all its products and history will be deleted from this phone. A safety copy is kept, so you can undo this from Settings.`)) {
             await DB.deleteProject(id); goBack('#/');
+            toast('Project deleted', [{ label: 'Undo', run: undoRestore }]);
           }
         } },
       ]),
@@ -1039,15 +1040,203 @@
     inp.click();
   }
 
+  /** What the safety copy was kept for: 'restore' or 'delete'. */
+  const safeWord = (safe) => safe?.reason === 'delete' || safe?.reason === 'deleteAll' ? 'delete' : 'restore';
+
   async function undoRestore() {
     const safe = await DB.beforeRestore();
     if (!safe) return;
+    const w = safeWord(safe);
     const c = countsOf(safe.data);
-    if (!await confirmSheet('Undo the restore?', `This puts back what was on this phone before the restore on ${fmtStamp(safe.savedAt)}: ${countsText(c)}. Everything there now will be replaced.`, 'Undo restore')) return;
+    if (!await confirmSheet(`Undo the ${w}?`, `This puts back what was on this phone before the ${w} on ${fmtStamp(safe.savedAt)}: ${countsText(c)}. Everything there now will be replaced.`, `Undo ${w}`)) return;
     try { await DB.replaceAll(safe.data, { undo: true }); }
     catch (e) { console.error(e); toast('Could not undo. Nothing was changed.'); return; }
-    toast('Restore undone');
-    go('#/');
+    toast(w === 'delete' ? 'Delete undone' : 'Restore undone');
+    if (/^#?\/?$/.test(location.hash)) render(); else go('#/'); // the toast's Undo can run on the Inventory screen
+  }
+
+  // ---------- delete projects / delete all (1.5) ----------
+  // Both keep a safety copy first (see DB.deleteProjects / DB.deleteAll), so the
+  // "Undo last delete" row in Settings and the toast's Undo can put everything back.
+  const backupLine = () => {
+    const last = backupPrefs.last();
+    return last ? `Last backup: ${esc(ago(last))}` : 'You have never made a backup';
+  };
+
+  async function viewDeleteProjects() {
+    setChrome({ title: 'Delete projects', back: '#/settings' });
+    const projects = await DB.listProjects();
+    if (!projects.length) return h(`<div class="empty">${ICON.box}<b>No projects</b>There is nothing to delete.</div>`);
+    const frag = h(`<div class="del-page">
+      <p class="desc">Tick the projects to delete. Their products, photos, locations, owners and History go with them.</p>
+      <div class="sel-bar"><span data-a="count">None selected</span><button type="button" class="link-btn" data-a="all">Select all</button></div>
+      <div class="list">${projects.map(p => `
+        <label class="card row check-row">
+          <input type="checkbox" class="check" value="${esc(p.id)}">
+          <div class="grow"><div class="t">${esc(p.name)}</div>
+            <div class="s">${plural(p.items, 'product')} · ${plural(p.units, 'unit')} in stock</div></div>
+        </label>`).join('')}</div>
+      <div class="del-bar"><button class="btn out wide" data-a="del" disabled>Delete selected</button></div>
+    </div>`);
+    const boxes = [...frag.querySelectorAll('.check')];
+    const $count = frag.querySelector('[data-a=count]');
+    const $all = frag.querySelector('[data-a=all]');
+    const $del = frag.querySelector('[data-a=del]');
+    const picked = () => boxes.filter(b => b.checked).map(b => b.value);
+    const update = () => {
+      const n = picked().length;
+      $count.textContent = n ? `${plural(n, 'project')} selected` : 'None selected';
+      $all.textContent = n === boxes.length ? 'Clear all' : 'Select all';
+      $del.disabled = !n;
+      $del.textContent = n ? `Delete ${plural(n, 'project')}` : 'Delete selected';
+      boxes.forEach(b => b.closest('.check-row').classList.toggle('on', b.checked));
+    };
+    boxes.forEach(b => b.onchange = update);
+    $all.onclick = () => { const on = picked().length !== boxes.length; boxes.forEach(b => b.checked = on); update(); };
+    $del.onclick = () => deleteProjectsSheet(picked());
+    return frag;
+  }
+
+  async function viewDeleteItems() {
+    setChrome({ title: 'Delete inventory', back: '#/settings' });
+    const projects = (await DB.listProjects()).filter(p => p.items);
+    if (!projects.length) return h(`<div class="empty">${ICON.box}<b>No inventory</b>There are no products to delete.</div>`);
+    const nat = (a, b) => (a || '').localeCompare(b || '', undefined, { numeric: true, sensitivity: 'base' });
+    const groups = await Promise.all(projects.map(async p => ({ p,
+      items: (await DB.listProducts(p.id)).sort((a, b) => nat(a.partNumber, b.partNumber) || nat(a.description, b.description)) })));
+    const frag = h(`<div>
+      <p class="desc">Tick the products to delete. Their photos and History go with them. The projects, locations and owners stay.</p>
+      <div class="sel-bar"><span data-a="count">None selected</span></div>
+      ${groups.map(({ p, items }) => `<div class="del-group" data-p="${esc(p.id)}">
+        <div class="sel-bar group-head"><h2 class="section">${esc(p.name)}</h2><button type="button" class="link-btn" data-a="grp">Select all</button></div>
+        <div class="list">${items.map(it => `
+          <label class="card row check-row">
+            <input type="checkbox" class="check" value="${esc(it.id)}">
+            ${it.photo ? `<img class="thumb" alt="" src="${blobUrl(it.photo)}">` : `<div class="thumb">${ICON.box}</div>`}
+            <div class="grow"><div class="t">${esc(it.partNumber || 'No part number')}</div>
+              <div class="s">${esc(it.description || '')}${it.description ? ' · ' : ''}${it.stock} in stock</div></div>
+          </label>`).join('')}</div>
+      </div>`).join('')}
+      <div class="del-bar"><button class="btn out wide" data-a="del" disabled>Delete selected</button></div>
+    </div>`);
+    const boxes = [...frag.querySelectorAll('.check')];
+    const $count = frag.querySelector('[data-a=count]');
+    const $del = frag.querySelector('[data-a=del]');
+    const picked = () => boxes.filter(b => b.checked).map(b => b.value);
+    const update = () => {
+      const n = picked().length;
+      $count.textContent = n ? `${plural(n, 'product')} selected` : 'None selected';
+      $del.disabled = !n;
+      $del.textContent = n ? `Delete ${plural(n, 'product')}` : 'Delete selected';
+      boxes.forEach(b => b.closest('.check-row').classList.toggle('on', b.checked));
+      groupEls.forEach(g => {
+        const gb = [...g.querySelectorAll('.check')];
+        g.querySelector('[data-a=grp]').textContent = gb.every(b => b.checked) ? 'Clear all' : 'Select all';
+      });
+    };
+    const groupEls = [...frag.querySelectorAll('.del-group')];
+    groupEls.forEach(g => {
+      g.querySelector('[data-a=grp]').onclick = () => {
+        const gb = [...g.querySelectorAll('.check')];
+        const on = !gb.every(b => b.checked);
+        gb.forEach(b => b.checked = on); update();
+      };
+    });
+    boxes.forEach(b => b.onchange = update);
+    $del.onclick = () => deleteItemsSheet(picked());
+    return frag;
+  }
+
+  async function deleteItemsSheet(ids) {
+    if (!ids.length) return;
+    const data = await DB.exportAll();
+    const drop = new Set(ids);
+    const items = data.products.filter(p => drop.has(p.id));
+    const pName = Object.fromEntries(data.projects.map(p => [p.id, p.name]));
+    const entries = data.movements.filter(m => drop.has(m.productId)).length;
+    const photos = items.filter(p => p.photo).length;
+    const units = items.reduce((a, p) => a + p.stock, 0);
+    const n = items.length;
+    const shown = items.slice(0, 8);
+    sheet(`<h3>Delete ${n === 1 ? 'this product' : `these ${n} products`}?</h3>
+      <div class="file-list">${shown.map(p => `<div><span class="file-name">${esc(p.partNumber || 'No part number')}</span> · ${esc(pName[p.projectId] || '')}</div>`).join('')}${n > shown.length ? `<div>and ${n - shown.length} more</div>` : ''}</div>
+      <p class="desc warn-box">This deletes ${esc(plural(n, 'product'))} (${esc(plural(units, 'unit'))} in stock), ${entries} History ${entries === 1 ? 'entry' : 'entries'} and ${esc(plural(photos, 'photo'))} from this phone. The projects stay. A safety copy is kept, so you can undo this from Settings.</p>
+      <button class="btn wide" data-a="backup">Back up first</button>
+      <p class="desc hint">${backupLine()}</p>
+      <div class="actions"><button class="btn" data-a="no">Cancel</button><button class="btn out" data-a="ok">Delete</button></div>`,
+      (el, close) => {
+        el.querySelector('[data-a=no]').onclick = close;
+        el.querySelector('[data-a=backup]').onclick = backupNow;
+        el.querySelector('[data-a=ok]').onclick = async () => {
+          close();
+          try { await DB.deleteProducts(ids); }
+          catch (e) { console.error(e); toast('Could not delete. Nothing was changed.'); return; }
+          go('#/settings', true);
+          toast(n === 1 ? 'Product deleted' : `${n} products deleted`, [{ label: 'Undo', run: undoRestore }]);
+        };
+      });
+  }
+
+  async function deleteProjectsSheet(ids) {
+    if (!ids.length) return;
+    const data = await DB.exportAll();
+    const drop = new Set(ids);
+    const gone = countsOf({
+      projects: data.projects.filter(p => drop.has(p.id)),
+      products: data.products.filter(p => drop.has(p.projectId)),
+      movements: data.movements.filter(m => drop.has(m.projectId)),
+    });
+    const names = data.projects.filter(p => drop.has(p.id)).map(p => p.name)
+      .sort((a, b) => a.localeCompare(b, undefined, { sensitivity: 'base' }));
+    const n = names.length;
+    sheet(`<h3>Delete ${n === 1 ? 'this project' : `these ${n} projects`}?</h3>
+      <div class="file-list">${names.map(x => `<div class="file-name">${esc(x)}</div>`).join('')}</div>
+      <p class="desc warn-box">This deletes ${esc(countsText(gone))} from this phone. A safety copy is kept, so you can undo this from Settings.</p>
+      <button class="btn wide" data-a="backup">Back up first</button>
+      <p class="desc hint">${backupLine()}</p>
+      <div class="actions"><button class="btn" data-a="no">Cancel</button><button class="btn out" data-a="ok">Delete</button></div>`,
+      (el, close) => {
+        el.querySelector('[data-a=no]').onclick = close;
+        el.querySelector('[data-a=backup]').onclick = backupNow;
+        el.querySelector('[data-a=ok]').onclick = async () => {
+          close();
+          try { await DB.deleteProjects(ids); }
+          catch (e) { console.error(e); toast('Could not delete. Nothing was changed.'); return; }
+          go('#/settings', true);
+          toast(n === 1 ? 'Project deleted' : `${n} projects deleted`, [{ label: 'Undo', run: undoRestore }]);
+        };
+      });
+  }
+
+  async function deleteAllSheet() {
+    const cur = countsOf(await DB.exportAll());
+    if (!cur.projects && !cur.products && !cur.entries) { toast('There is no data to delete'); return; }
+    sheet(`<h3>Delete all data?</h3>
+      <p class="desc warn-box"><b>Everything on this phone will be erased:</b> ${esc(countsText(cur))}. Your settings, like the backup reminder, stay. A safety copy is kept, so you can undo this from Settings.</p>
+      <button class="btn wide" data-a="backup">Back up first</button>
+      <p class="desc hint">${backupLine()}</p>
+      <form>
+        <label class="desc" for="wipe-word">Type <b>DELETE</b> to confirm</label>
+        <input class="input" id="wipe-word" name="v" autocomplete="off" autocapitalize="characters" spellcheck="false" enterkeyhint="done">
+        <div class="actions"><button type="button" class="btn" data-a="no">Cancel</button><button class="btn out" data-a="ok" disabled>Delete all</button></div>
+      </form>`,
+      (el, close) => {
+        const f = el.querySelector('form');
+        const ok = el.querySelector('[data-a=ok]');
+        const typed = () => f.elements.v.value.trim().toUpperCase() === 'DELETE';
+        f.elements.v.oninput = () => { ok.disabled = !typed(); };
+        el.querySelector('[data-a=no]').onclick = close;
+        el.querySelector('[data-a=backup]').onclick = backupNow;
+        f.onsubmit = async (e) => {
+          e.preventDefault();
+          if (!typed()) return;
+          close();
+          try { await DB.deleteAll(); }
+          catch (e2) { console.error(e2); toast('Could not delete. Nothing was changed.'); return; }
+          go('#/');
+          toast('All data deleted', [{ label: 'Undo', run: undoRestore }]);
+        };
+      });
   }
 
   // CSV: opens in Excel, Google Sheets or Numbers. UTF-8 with a BOM so Excel reads
@@ -1188,7 +1377,7 @@
           <div class="grow"><div class="t">Restore from backup</div><div class="s">Replace this phone's data with a backup file</div></div>${ICON.chev}
         </button>
         ${safe ? `<button class="card row" data-a="undo">
-          <div class="grow"><div class="t">Undo last restore</div><div class="s">Put back the data from before the restore on ${esc(fmtStamp(safe.savedAt))}</div></div>${ICON.chev}
+          <div class="grow"><div class="t">Undo last ${safeWord(safe)}</div><div class="s">Put back the data from before the ${safeWord(safe)} on ${esc(fmtStamp(safe.savedAt))}</div></div>${ICON.chev}
         </button>` : ''}
         <button class="card row" data-a="csv">
           <div class="grow"><div class="t">Export to spreadsheet (CSV)</div><div class="s">Stock and History for one project or all, with locations and owners</div></div>${ICON.chev}
@@ -1197,6 +1386,18 @@
           <div class="grow"><div class="t">Backup reminder</div><div class="s">Remind me on the Inventory screen after ${REMIND_DAYS} days without a backup</div></div>
           <input type="checkbox" class="switch" name="remind" ${backupPrefs.remind() ? 'checked' : ''}>
         </label>
+      </div>
+      <h2 class="section">Delete data</h2>
+      <div class="list">
+        <a class="card row" href="#/settings/delete-items">
+          <div class="grow"><div class="t danger-txt">Delete inventory</div><div class="s">Pick products to delete, with their photos and History. The projects stay.</div></div>${ICON.chev}
+        </a>
+        <a class="card row" href="#/settings/delete">
+          <div class="grow"><div class="t danger-txt">Delete projects</div><div class="s">Pick one or more projects to delete, with their products, photos and History</div></div>${ICON.chev}
+        </a>
+        <button class="card row" data-a="wipe">
+          <div class="grow"><div class="t danger-txt">Delete all data</div><div class="s">Erase every project, product, photo and History entry on this phone</div></div>${ICON.chev}
+        </button>
       </div>
       <h2 class="section">Updates</h2>
       <div class="list">
@@ -1223,6 +1424,7 @@
     frag.querySelector('[data-a=csv]').onclick = () => exportSheet();
     const u = frag.querySelector('[data-a=undo]');
     if (u) u.onclick = undoRestore;
+    frag.querySelector('[data-a=wipe]').onclick = deleteAllSheet;
     frag.querySelector('[name=remind]').onchange = (e) => {
       ls.set('backupReminder', e.target.checked ? 'on' : 'off');
       toast(e.target.checked ? 'Backup reminder on' : 'Backup reminder off');
@@ -1246,6 +1448,7 @@
     setChrome({ title: 'Help', back: '#/settings' });
     const topics = [
       ['Projects', 'Each project keeps its own inventory. On the Inventory screen tap <b>New project</b>. Open a project and tap <b>⋮</b> to rename or delete it.'],
+      ['Deleting inventory, projects or all data', 'To delete products but keep their project, tap <b>⚙ Settings</b> › <b>Delete inventory</b>, tick the products (or <b>Select all</b> under a project) and tap <b>Delete</b>. To delete whole projects, tap <b>Delete projects</b>, tick the projects you want gone and tap <b>Delete</b>. To wipe everything, tap <b>Delete all data</b> and type <b>DELETE</b> to confirm. Both offer <b>Back up first</b>. A safety copy is kept, so if it was a mistake, tap <b>Undo</b> straight away or <b>Undo last delete</b> in Settings. Only the last restore or delete can be undone.'],
       ['Adding a product', 'Open a project and tap <b>Add product</b>. Tap the photo box to take a picture, enter the model/part number and a description, set the starting quantity, then tap <b>Add product</b>.'],
       ['Photos', 'Tap the photo box to use the camera, or <b>Choose from library</b> for a saved picture. To change a photo later, open the product, tap <b>⋮</b> › <b>Edit product</b>.'],
       ['Adding and removing stock', 'Tap a product to open it, then tap <b>+ Add</b> or <b>− Remove</b>. Pick the date (today is filled in), enter the quantity and, if you like, a note such as "10 for sections 15A". Add asks for the location and owner. Remove asks where the stock comes from and won\'t let you take more than that spot holds. The form shows the stock there and the total after the change. Notes you used recently appear under the note box: tap one to reuse it. Right after saving, tap <b>Undo</b> at the bottom if it was a mistake.'],
@@ -1320,6 +1523,8 @@
       else if (parts[0] === 'i' && parts[1]) node = await viewProduct(parts[1]);
       else if (parts[0] === 'settings' && parts[1] === 'new') node = viewWhatsNew();
       else if (parts[0] === 'settings' && parts[1] === 'help') node = viewHelp();
+      else if (parts[0] === 'settings' && parts[1] === 'delete-items') node = await viewDeleteItems();
+      else if (parts[0] === 'settings' && parts[1] === 'delete') node = await viewDeleteProjects();
       else if (parts[0] === 'settings') node = await viewSettings();
       else node = await viewHome();
     } catch (err) {

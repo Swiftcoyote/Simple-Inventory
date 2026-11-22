@@ -12,8 +12,10 @@
  *               past date, so only the date is meaningful), createdAt,
  *               editedAt + edits[] (earlier versions, oldest first; only once edited) }
  *               kind 'move': delta 0, qty moved from (location, owner) to (toLocation, toOwner).
- *   meta      out-of-line keys. 'beforeRestore' = { savedAt, data: { projects, products,
- *               movements } }: everything as it was just before the last restore (1.4).
+ *   meta      out-of-line keys. 'beforeRestore' = { savedAt, reason, data: { projects,
+ *               products, movements } }: the safety copy, everything as it was just before
+ *               the last restore (1.4) or delete (1.5). reason: 'restore' (or missing, from
+ *               1.4), 'delete' (some projects) or 'deleteAll'. Only one copy is kept.
  *
  * Stock is counted per place (location + owner): the sum of entries at that place.
  * Invariants: product.stock === sum(movement.delta) for that product, and no place
@@ -131,19 +133,24 @@ const DB = (() => {
     return rec;
   }
 
-  async function deleteProject(id) {
+  /** Deletes whole projects (with all their products, photos and entries) and/or single
+   *  products (with their entries; the project stays), in one transaction. Everything as
+   *  it was before is kept as the safety copy (meta 'beforeRestore', reason 'delete'),
+   *  so Settings can undo it. */
+  async function deleteData({ projectIds = [], productIds = [] }) {
+    const dropProj = new Set(projectIds), dropProd = new Set(productIds);
     const db = await open();
-    const tx = db.transaction(['projects', 'products', 'movements'], 'readwrite');
-    tx.objectStore('projects').delete(id);
-    for (const store of ['products', 'movements']) {
-      const idx = tx.objectStore(store).index('projectId');
-      idx.openKeyCursor(IDBKeyRange.only(id)).onsuccess = (e) => {
-        const c = e.target.result;
-        if (c) { tx.objectStore(store).delete(c.primaryKey); c.continue(); }
-      };
-    }
+    const tx = db.transaction([...DATA_STORES, 'meta'], 'readwrite');
+    const [projects, products, movements] = await Promise.all(DATA_STORES.map(n => reqP(tx.objectStore(n).getAll())));
+    tx.objectStore('meta').put({ savedAt: now(), reason: 'delete', data: { projects, products, movements } }, 'beforeRestore');
+    for (const p of projects) if (dropProj.has(p.id)) tx.objectStore('projects').delete(p.id);
+    for (const p of products) if (dropProj.has(p.projectId) || dropProd.has(p.id)) tx.objectStore('products').delete(p.id);
+    for (const m of movements) if (dropProj.has(m.projectId) || dropProd.has(m.productId)) tx.objectStore('movements').delete(m.id);
     await done(tx);
   }
+  const deleteProjects = (ids) => deleteData({ projectIds: ids });
+  const deleteProducts = (ids) => deleteData({ productIds: ids });
+  const deleteProject = (id) => deleteProjects([id]);
 
   // ---------- locations & owners ----------
   // Each project keeps two name lists: project.locations and project.owners. A name is
@@ -465,15 +472,16 @@ const DB = (() => {
   /** Replaces everything with `data` in one transaction (all or nothing). What was there
    *  before is kept in meta 'beforeRestore', so the restore can be undone.
    *  Each product's stock is set from its entries, so the stock invariant holds.
-   *  undo: true puts the safety copy back instead and then removes it. */
-  async function replaceAll(data, { undo = false } = {}) {
+   *  undo: true puts the safety copy back instead and then removes it.
+   *  reason is saved with the safety copy ('restore', or 'deleteAll' for Delete all data). */
+  async function replaceAll(data, { undo = false, reason = 'restore' } = {}) {
     const sums = {};
     for (const m of data.movements) sums[m.productId] = (sums[m.productId] || 0) + (m.delta || 0);
     const db = await open();
     const tx = db.transaction([...DATA_STORES, 'meta'], 'readwrite');
     const [projects, products, movements] = await Promise.all(DATA_STORES.map(n => reqP(tx.objectStore(n).getAll())));
     if (undo) tx.objectStore('meta').delete('beforeRestore');
-    else tx.objectStore('meta').put({ savedAt: now(), data: { projects, products, movements } }, 'beforeRestore');
+    else tx.objectStore('meta').put({ savedAt: now(), reason, data: { projects, products, movements } }, 'beforeRestore');
     for (const n of DATA_STORES) tx.objectStore(n).clear();
     for (const p of data.projects) tx.objectStore('projects').put(p);
     for (const p of data.products) tx.objectStore('products').put({ ...p, stock: sums[p.id] || 0 });
@@ -481,7 +489,11 @@ const DB = (() => {
     await done(tx);
   }
 
-  /** The safety copy from before the last restore, or undefined. */
+  /** Erases every project, product, photo and entry (settings in localStorage stay).
+   *  A safety copy is kept first, like a restore, so it can be undone. */
+  const deleteAll = () => replaceAll({ projects: [], products: [], movements: [] }, { reason: 'deleteAll' });
+
+  /** The safety copy from before the last restore or delete, or undefined. */
   const beforeRestore = () => get('meta', 'beforeRestore');
 
   async function persist() {
@@ -492,7 +504,7 @@ const DB = (() => {
   }
 
   return {
-    open, listProjects, getProject, saveProject, deleteProject,
+    open, listProjects, getProject, saveProject, deleteProject, deleteProjects, deleteProducts, deleteAll,
     listProducts, getProduct, saveProduct, deleteProduct,
     listMovements, addMovement, setCount, updateMovement, updateMovementNote, deleteMovement, recentNotes, persist,
     bucketsOf, isLow, setLowStock, addName, renameName, removeName,
