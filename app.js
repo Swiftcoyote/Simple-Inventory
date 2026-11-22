@@ -1531,6 +1531,8 @@
     </div>`;
   }
 
+  const setPreview = (on) => document.documentElement.classList.toggle('previewing', on);
+
   async function viewReports() {
     setChrome({ title: 'Reports', back: '#/' });
     const projects = await DB.listProjects();
@@ -1585,9 +1587,17 @@
           ${filterBits.length ? `<button type="button" class="link-btn" data-a="clear">Clear filters</button>` : ''}
         </details>
       </form>
+      <button class="btn primary wide no-print" data-a="preview" style="margin-top:4px">Preview report</button>
       <div class="actions no-print">
         <button class="btn" data-a="pdf">Print / save PDF</button>
-        <button class="btn primary" data-a="csv">Share spreadsheet</button>
+        <button class="btn" data-a="csv">Share spreadsheet</button>
+      </div>
+      <div class="preview-bar">
+        <div class="pv-lbl">Preview: this is how the PDF and printout will look</div>
+        <div class="actions">
+          <button class="btn" data-a="close-preview">Close</button>
+          <button class="btn primary" data-a="pdf">Print / save PDF</button>
+        </div>
       </div>
 
       <div class="report-head">
@@ -1661,9 +1671,14 @@
     for (const k of ['loc', 'own', 'who', 'prod']) f.elements[k].onchange = () => { st[k] = f.elements[k].value; redo(); };
     const clr = f.querySelector('[data-a=clear]');
     if (clr) clr.onclick = () => { st.loc = st.own = st.who = st.prod = ALL; redo(); };
-    frag.querySelector('[data-a=pdf]').onclick = () => {
+    const printNow = () => {
       try { window.print(); } catch { toast("This phone can't print from here. Try Share spreadsheet."); }
     };
+    frag.querySelectorAll('[data-a=pdf]').forEach(b => b.onclick = printNow);
+    // Preview: the same page the printout uses (html.previewing applies the print
+    // styles on screen), with a bar at the bottom to print or close.
+    frag.querySelector('[data-a=preview]').onclick = () => { setPreview(true); window.scrollTo(0, 0); };
+    frag.querySelector('[data-a=close-preview]').onclick = () => { setPreview(false); window.scrollTo(0, 0); };
     frag.querySelector('[data-a=csv]').onclick = () => {
       const tag = `${st.proj ? slug(r.pName[st.proj]) : 'all-projects'}-${st.from}-to-${st.to}`;
       fileReadySheet(reportCsvFiles(r, st, tag, projLabel, filterBits), {
@@ -1828,7 +1843,7 @@
       ['Adding and removing stock', 'Tap a product to open it, then tap <b>+ Add</b> or <b>− Remove</b>. Pick the date (today is filled in), enter the quantity and, if you like, a note such as "10 for sections 15A". Add asks for the location and owner. Remove asks where the stock comes from and won\'t let you take more than that spot holds. The form shows the stock there and the total after the change. Notes you used recently appear under the note box: tap one to reuse it. Right after saving, tap <b>Undo</b> at the bottom if it was a mistake.'],
       ['Locations and owners', 'Stock is counted separately for each location (for example Bin A, Truck) and owner. The product page shows the total and how much is at each one. In the Add form, pick a location and owner, or choose <b>+ New location…</b> / <b>+ New owner…</b> to type a new one. To rename or remove names, open the project and tap <b>⋮</b> › <b>Locations and owners</b>. Renaming updates every entry in the project.'],
       ['Who (people)', 'Add, Remove, Move and Correct stock count ask <b>Who</b> is doing it. Pick a name, or choose <b>+ New person…</b> to type one. The last name you picked is filled in next time. To rename or remove names, tap <b>⚙ Settings</b> › <b>People</b>. Renaming changes the name on every entry. Entries from before version 1.6 show Who as <b>Not set</b>; tap one in History and <b>Edit</b> it to fill it in.'],
-      ['Reports', 'Tap <b>Reports</b> on the Inventory screen, or open a project and tap <b>⋮</b> › <b>Reports</b>. Pick a project or All projects and the dates (This week, Last week, This month, Last month, Last 30 days, or type your own). Tap <b>Filters</b> to look at one location, owner, person or product. The report shows the totals added and used, then the same per product (with stock at the start and end, and when it was last used), per location, per owner, per person and per note, then every entry with its date, who and note. Tap <b>Print / save PDF</b> to print it or save it as a PDF (on iPhone, tap the Share button on the print screen), or <b>Share spreadsheet</b> for CSV files.'],
+      ['Reports', 'Tap <b>Reports</b> on the Inventory screen, or open a project and tap <b>⋮</b> › <b>Reports</b>. Pick a project or All projects and the dates (This week, Last week, This month, Last month, Last 30 days, or type your own). Tap <b>Filters</b> to look at one location, owner, person or product. The report shows the totals added and used, then the same per product (with stock at the start and end, and when it was last used), per location, per owner, per person and per note, then every entry with its date, who and note. Tap <b>Preview report</b> to see it exactly as the PDF will look, then <b>Print / save PDF</b> or <b>Close</b>. Tap <b>Print / save PDF</b> to print it or save it as a PDF (on iPhone, tap the Share button on the print screen), or <b>Share spreadsheet</b> for CSV files.'],
       ['Moving stock', 'To move stock between locations or owners (for example from Bin A to the truck), open the product and tap <b>⇄ Move</b>. Pick where it comes from, where it goes, and how many. The total stays the same and History shows one "Moved" entry.'],
       ['Low-stock warning', 'When adding a product, when adding or removing stock, or with <b>⋮</b> › <b>Edit product</b>, fill in <b>Low-stock warning</b>. When the total in stock is at or below that number, the product shows a red <b>Low</b> tag, the project shows how many items are low, and <b>Low stock only</b> above the product list shows just those.'],
       ['History', "Open a product to see every change, newest first: the date, whether it was added, removed or moved, the quantity, the location and owner, the total before → after, and the note."],
@@ -1889,6 +1904,7 @@
   let renderSeq = 0;
   async function render() {
     const seq = ++renderSeq;
+    if (!/^#\/reports/.test(location.hash)) setPreview(false);
     const parts = (location.hash.replace(/^#\/?/, '') || '').split('/').filter(Boolean);
     let node;
     try {

@@ -395,17 +395,42 @@ button.card.row { width: 100%; text-align: left; font: inherit; color: inherit; 
 .rt-head span:not(:first-child) { font-weight: 600; }
 .rentries li { cursor: default; }
 
-/* Reports print as a clean page ("Print / save PDF"): no bar, filters or buttons. */
+/* Reports print as a clean page ("Print / save PDF"): no bar, filters or buttons.
+   html.previewing shows the same page on screen ("Preview report"), with a bottom bar. */
+.preview-bar { display: none; }
 @media print {
   :root, :root:not([data-theme="light"]), :root[data-theme="dark"] {
     --bg: #fff; --card: #fff; --text: #000; --muted: #444; --line: #ccc;
     --in: #11702f; --out: #b02a18; --accent: #1f6feb; color-scheme: light;
   }
-  .topbar, .no-print, #toast, #sheetRoot, .fab { display: none !important; }
+  .topbar, .no-print, #toast, #sheetRoot, .fab, .preview-bar { display: none !important; }
   main#view { padding: 0 !important; max-width: none !important; }
   .print-only { display: block; }
   .card { box-shadow: none; border: 1px solid var(--line); break-inside: avoid; }
   .rnums > div { border: 1px solid var(--line); }
   .hist li { break-inside: avoid; }
   h2.section { break-after: avoid; }
+}
+html.previewing, html.previewing:root:not([data-theme="light"]), html.previewing:root[data-theme="dark"] {
+  --bg: #fff; --card: #fff; --text: #000; --muted: #444; --line: #ccc;
+  --in: #11702f; --out: #b02a18; --accent: #1f6feb; color-scheme: light;
+}
+@media screen {
+  html.previewing body { background: #8a8f98; }
+  html.previewing .topbar, html.previewing .no-print { display: none !important; }
+  html.previewing main#view {
+    background: #fff; max-width: 640px; margin: 12px auto calc(130px + var(--safe-b));
+    padding: 20px 16px 28px; border-radius: 4px; box-shadow: 0 2px 12px rgba(0, 0, 0, .25);
+    width: calc(100% - 24px);
+  }
+  html.previewing .print-only { display: block; }
+  html.previewing .card { box-shadow: none; border: 1px solid var(--line); }
+  html.previewing .rnums > div { border: 1px solid var(--line); }
+  html.previewing .report-head { margin-top: 0; }
+  html.previewing .preview-bar {
+    display: block; position: fixed; left: 0; right: 0; bottom: 0; z-index: 5;
+    padding: 10px 16px calc(12px + var(--safe-b)); background: #fff; border-top: 1px solid #ccc;
+  }
+  html.previewing .preview-bar .actions { margin: 6px 0 0; }
+  .pv-lbl { text-align: center; font-size: 14px; color: #444; }
 }

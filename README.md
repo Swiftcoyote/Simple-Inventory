@@ -31,7 +31,8 @@ A phone-first inventory tracker that works offline and installs to your home scr
 - **Reports** (Inventory screen, project ⋮, or Settings): pick a project or all and a date range
   (quick picks or custom), optionally one location, owner, person or product. Shows totals,
   then start/added/used/end per product, location and owner, added/used per person and per note,
-  and every entry. *Print / save PDF* uses the browser's print (print styles hide the controls);
+  and every entry. *Preview report* shows the print layout on screen (`html.previewing`, same rules as print);
+  *Print / save PDF* uses the browser's print (print styles hide the controls);
   *Share spreadsheet* makes a summary CSV and an entries CSV.
 
 All data is stored on the phone (IndexedDB). There is no server and no sync.
