@@ -4,6 +4,21 @@
  * to match (e.g. '1.1-build2'). Builds count up and never reset. */
 window.CHANGELOG = [
   {
+    version: '1.4', build: 5, date: '2026-11-22',
+    title: 'Backup, restore and spreadsheet export',
+    changes: [
+      'New Backup and export section in Settings (tap ⚙ on the Inventory screen).',
+      'Back up now makes one backup file with every project, product, photo, location, owner and History entry. Tap "Share or save…" to send it to Google Drive, Files, email and so on, or "Save to phone" to put it in Downloads.',
+      'Settings shows when you last backed up. If it has been more than 7 days, the Inventory screen shows a reminder with a Back up now button. Tap Later to hide it for a day, or turn off "Backup reminder" in Settings.',
+      'Restore from backup: pick a backup file and the app shows what is in it (date made, projects, products, entries, photos) before anything changes. Replace swaps everything on this phone for the backup.',
+      'Before a restore, the app keeps a safety copy of your current data. If you restored the wrong file, tap Undo last restore in Settings.',
+      'Export to spreadsheet (CSV) for one project or all projects. It opens in Excel, Google Sheets or Numbers. Also in each project under ⋮.',
+      'The Stock list has one row per product, location and owner: project, part number, description, location, owner, quantity, product total, low-stock warning and a Low flag.',
+      'The History file has one row per entry: date, time, project, part number, description, type (Added, Removed, Moved, Count correction), quantity, location, owner, where it moved to, product total after, note, and whether it was edited.',
+      'Your existing products and history are kept exactly as they were.',
+    ],
+  },
+  {
     version: '1.3', build: 4, date: '2026-11-22',
     title: 'Locations, owners and low-stock warnings',
     changes: [

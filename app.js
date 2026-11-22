@@ -553,6 +553,7 @@
     setChrome({ title: 'Inventory', settings: true });
     const projects = await DB.listProjects();
     const frag = h(`<div>
+      ${backupBannerHtml(projects.length > 0)}
       ${projects.length ? `<div class="list">${projects.map(p => `
         <a class="card row" href="#/p/${p.id}">
           <div class="proj-icon">${esc((p.name.trim()[0] || '?').toUpperCase())}</div>
@@ -568,6 +569,7 @@
       const name = await textSheet('New project', { placeholder: 'Project name', label: 'Create' });
       if (name) { const p = await DB.saveProject({ name }); go(`#/p/${p.id}`); }
     };
+    wireBackupBanner(frag);
     return frag;
   }
 
@@ -579,6 +581,7 @@
       title: project.name, back: '#/',
       menu: () => menuSheet(project.name, [
         { label: 'Locations and owners', run: () => go(`#/p/${id}/places`) },
+        { label: 'Export to spreadsheet (CSV)', run: () => exportSheet(id) },
         { label: 'Rename project', run: async () => {
           const name = await textSheet('Rename project', { value: project.name });
           if (name) { await DB.saveProject({ id, name }); render(); }
@@ -868,6 +871,299 @@
     return frag;
   }
 
+  // ---------- backup, restore & export ----------
+  // A backup is one JSON file: { app, format, version, build, createdAt, counts, data }.
+  // data holds every project, product and entry exactly as stored; photos become
+  // data: URLs so the file is self-contained. Nothing leaves the phone unless the
+  // user shares or saves the file themselves.
+  const BACKUP_APP = 'simple-inventory', BACKUP_FORMAT = 1;
+  const REMIND_DAYS = 7;
+  const DAY = 86400000;
+
+  const blobToDataUrl = (b) => new Promise((res, rej) => {
+    const r = new FileReader(); r.onload = () => res(r.result); r.onerror = () => rej(r.error); r.readAsDataURL(b);
+  });
+  function dataUrlToBlob(u) {
+    const m = /^data:([^;,]*)(;base64)?,(.*)$/s.exec(u || '');
+    if (!m) return null;
+    const bin = m[2] ? atob(m[3]) : decodeURIComponent(m[3]);
+    const bytes = new Uint8Array(bin.length);
+    for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+    return new Blob([bytes], { type: m[1] || 'image/jpeg' });
+  }
+  const fmtSize = (n) => n < 1024 * 1024 ? `${Math.max(1, Math.round(n / 1024))} KB` : `${(n / 1024 / 1024).toFixed(1)} MB`;
+  const countsOf = (d) => ({
+    projects: d.projects.length, products: d.products.length, entries: d.movements.length,
+    photos: d.products.filter(p => p.photo).length,
+  });
+  const countsText = (c) => `${plural(c.projects, 'project')}, ${plural(c.products, 'product')}, ${c.entries} History ${c.entries === 1 ? 'entry' : 'entries'} and ${plural(c.photos, 'photo')}`;
+  /** "3 days ago" style, for the last backup. */
+  function ago(iso) {
+    const d = Math.floor((Date.now() - new Date(iso)) / DAY);
+    if (d <= 0) return `today, ${new Date(iso).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })}`;
+    return d === 1 ? 'yesterday' : `${d} days ago`;
+  }
+  const fmtStamp = (iso) => new Date(iso).toLocaleString([], { month: 'short', day: 'numeric', year: 'numeric', hour: 'numeric', minute: '2-digit' });
+  const slug = (s) => (s || '').normalize('NFKD').replace(/[^\w\s-]/g, '').trim().replace(/[\s_]+/g, '-').toLowerCase().slice(0, 40) || 'project';
+
+  const backupPrefs = {
+    last: () => ls.get('lastBackup'),
+    remind: () => ls.get('backupReminder') !== 'off',
+    due() {
+      if (!this.remind()) return false;
+      const snooze = ls.get('backupSnooze');
+      if (snooze && Date.now() < +new Date(snooze)) return false;
+      const last = this.last();
+      return !last || Date.now() - new Date(last) > REMIND_DAYS * DAY;
+    },
+  };
+
+  async function makeBackupFile() {
+    const data = await DB.exportAll();
+    const products = [];
+    for (const p of data.products) products.push({ ...p, photo: p.photo ? await blobToDataUrl(p.photo) : null });
+    const createdAt = new Date().toISOString();
+    const out = {
+      app: BACKUP_APP, format: BACKUP_FORMAT, version: APP_VERSION, build: APP_BUILD, createdAt,
+      counts: countsOf(data), data: { projects: data.projects, products, movements: data.movements },
+    };
+    const file = new File([JSON.stringify(out)], `inventory-backup-${toDateInput()}.json`, { type: 'application/json' });
+    return { file, counts: out.counts };
+  }
+
+  /** Opens the phone's Share sheet. true = shared, false = cancelled. */
+  async function shareFile(file) {
+    try { await navigator.share({ files: [file], title: file.name }); return true; }
+    catch (e) { if (e.name === 'AbortError') return false; throw e; }
+  }
+  const canShareFile = (file) => { try { return !!navigator.canShare?.({ files: [file] }); } catch { return false; } };
+  function saveFile(file) {
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(file); a.download = file.name;
+    document.body.append(a); a.click(); a.remove();
+    setTimeout(() => URL.revokeObjectURL(a.href), 60000);
+  }
+
+  /** The file is ready: Share (when the phone can) or Save to phone. Built first and
+   *  shared on a fresh tap, because phones only open the Share sheet straight after a tap. */
+  function fileReadySheet(files, { title, desc, onSent }) {
+    const share = files.every(canShareFile) && (files.length === 1 || canShareMany(files));
+    const size = files.reduce((a, f) => a + f.size, 0);
+    sheet(`<h3>${esc(title)}</h3>
+      <p class="desc">${desc}</p>
+      <div class="file-list">${files.map(f => `<div class="file-name">${esc(f.name)}</div>`).join('')}<div class="muted">${fmtSize(size)}</div></div>
+      <div class="menu">
+        ${share ? `<button class="btn primary" data-a="share">Share or save…</button>` : ''}
+        <button class="btn ${share ? '' : 'primary'}" data-a="save">Save to phone (Downloads)</button>
+        <button class="btn ghost" data-a="no">Close</button>
+      </div>`,
+      (el, close) => {
+        el.querySelector('[data-a=no]').onclick = close;
+        el.querySelector('[data-a=save]').onclick = () => { files.forEach(saveFile); close(); onSent?.('saved'); };
+        const sb = el.querySelector('[data-a=share]');
+        if (sb) sb.onclick = async () => {
+          try {
+            const ok = await (files.length === 1 ? shareFile(files[0]) : navigator.share({ files, title }).then(() => true, e => { if (e.name === 'AbortError') return false; throw e; }));
+            if (ok) { close(); onSent?.('shared'); }
+          } catch (e) { console.error(e); toast('Could not share. Try Save to phone.'); }
+        };
+      });
+  }
+  const canShareMany = (files) => { try { return !!navigator.canShare?.({ files }); } catch { return false; } };
+
+  async function backupNow() {
+    sheet(`<h3>Back up</h3><p class="desc">Preparing your backup…</p>`);
+    let made;
+    try { made = await makeBackupFile(); }
+    catch (e) { console.error(e); $sheetRoot.replaceChildren(); toast('Could not make the backup'); return; }
+    fileReadySheet([made.file], {
+      title: 'Backup ready',
+      desc: `Holds ${esc(countsText(made.counts))}. Keep it somewhere off this phone, like Google Drive, iCloud Drive or an email to yourself.`,
+      onSent: () => {
+        ls.set('lastBackup', new Date().toISOString());
+        toast('Backup saved');
+        render();
+      },
+    });
+  }
+
+  /** Reads a backup file. Throws with a message for the user if it isn't one. */
+  async function readBackup(file) {
+    let obj;
+    try { obj = JSON.parse(await file.text()); } catch { throw new Error("This isn't a Simple Inventory backup file."); }
+    if (!obj || obj.app !== BACKUP_APP || !obj.data) throw new Error("This isn't a Simple Inventory backup file.");
+    if (obj.format > BACKUP_FORMAT || obj.build > APP_BUILD) throw new Error(`This backup was made by a newer version (${obj.version} build ${obj.build}). Update the app first: close it fully and open it again.`);
+    const { projects, products, movements } = obj.data;
+    const ok = Array.isArray(projects) && Array.isArray(products) && Array.isArray(movements)
+      && projects.every(p => p && p.id && typeof p.name === 'string')
+      && products.every(p => p && p.id && p.projectId)
+      && movements.every(m => m && m.id && m.productId && typeof m.at === 'string' && typeof m.delta === 'number');
+    if (!ok) throw new Error('This backup file is damaged or incomplete, so nothing was changed.');
+    const data = {
+      projects,
+      products: products.map(p => ({ ...p, photo: typeof p.photo === 'string' ? dataUrlToBlob(p.photo) : null })),
+      movements,
+    };
+    return { createdAt: obj.createdAt, version: obj.version, build: obj.build, data, counts: countsOf(data) };
+  }
+
+  function restorePick() {
+    const inp = document.createElement('input');
+    inp.type = 'file'; inp.accept = '.json,application/json';
+    inp.onchange = async () => {
+      const file = inp.files?.[0];
+      if (!file) return;
+      let b;
+      try { b = await readBackup(file); }
+      catch (e) { sheet(`<h3>Can't restore</h3><p class="desc">${esc(e.message)}</p><div class="menu"><button class="btn" data-a="ok">OK</button></div>`, (el, close) => { el.querySelector('[data-a=ok]').onclick = close; }); return; }
+      const cur = countsOf(await DB.exportAll());
+      sheet(`<h3>Restore this backup?</h3>
+        <dl class="entry">
+          <dt>Made</dt><dd>${b.createdAt ? esc(fmtStamp(b.createdAt)) : 'Unknown'}</dd>
+          <dt>App</dt><dd>Version ${esc(b.version)} · Build ${esc(b.build)}</dd>
+          <dt>Holds</dt><dd>${esc(countsText(b.counts))}</dd>
+        </dl>
+        <p class="desc warn-box"><b>Everything on this phone will be replaced</b> (now ${esc(countsText(cur))}). A safety copy of it is kept, so you can undo this from Settings.</p>
+        <div class="actions"><button class="btn" data-a="no">Cancel</button><button class="btn out" data-a="ok">Replace</button></div>`,
+        (el, close) => {
+          el.querySelector('[data-a=no]').onclick = close;
+          el.querySelector('[data-a=ok]').onclick = async () => {
+            close();
+            try { await DB.replaceAll(b.data); }
+            catch (e) { console.error(e); toast('Restore failed. Nothing was changed.'); return; }
+            toast('Backup restored');
+            go('#/');
+          };
+        });
+    };
+    inp.click();
+  }
+
+  async function undoRestore() {
+    const safe = await DB.beforeRestore();
+    if (!safe) return;
+    const c = countsOf(safe.data);
+    if (!await confirmSheet('Undo the restore?', `This puts back what was on this phone before the restore on ${fmtStamp(safe.savedAt)}: ${countsText(c)}. Everything there now will be replaced.`, 'Undo restore')) return;
+    try { await DB.replaceAll(safe.data, { undo: true }); }
+    catch (e) { console.error(e); toast('Could not undo. Nothing was changed.'); return; }
+    toast('Restore undone');
+    go('#/');
+  }
+
+  // CSV: opens in Excel, Google Sheets or Numbers. UTF-8 with a BOM so Excel reads
+  // accents correctly. Text starting with = + - @ gets a leading ' so spreadsheets
+  // don't treat it as a formula.
+  const csvCell = (v) => {
+    if (v == null) return '';
+    if (typeof v === 'number') return String(v);
+    let s = String(v);
+    if (/^[=+\-@\t\r]/.test(s)) s = `'${s}`;
+    return /[",\r\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
+  };
+  const csvFile = (name, rows) => new File(['﻿' + rows.map(r => r.map(csvCell).join(',')).join('\r\n') + '\r\n'], name, { type: 'text/csv' });
+  const hhmm = (d) => `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`;
+  const orName = (n) => n || NOT_SET;
+  const kindWord = (m) => m.kind === 'count' ? 'Count correction' : m.kind === 'move' ? 'Moved' : m.delta > 0 ? 'Added' : 'Removed';
+
+  async function makeCsvFiles(projectId, which) {
+    const data = await DB.exportAll();
+    const projects = data.projects.filter(p => !projectId || p.id === projectId);
+    const pName = Object.fromEntries(projects.map(p => [p.id, p.name]));
+    const nat = (a, b) => (a || '').localeCompare(b || '', undefined, { numeric: true, sensitivity: 'base' });
+    const products = data.products.filter(p => pName[p.projectId] != null)
+      .sort((a, b) => nat(pName[a.projectId], pName[b.projectId]) || nat(a.partNumber, b.partNumber) || nat(a.description, b.description));
+    const byProduct = {};
+    for (const m of data.movements) (byProduct[m.productId] ||= []).push(m);
+    const chrono = (a, b) => a.at.localeCompare(b.at) || a.createdAt.localeCompare(b.createdAt);
+    const tag = projectId ? slug(pName[projectId]) : 'all-projects';
+    const files = [];
+
+    if (which !== 'history') {
+      const rows = [['Project', 'Part number', 'Description', 'Location', 'Owner', 'Quantity', 'Product total', 'Low-stock warning at', 'Low']];
+      for (const p of products) {
+        const moves = byProduct[p.id] || [];
+        const total = moves.reduce((a, m) => a + m.delta, 0);
+        const low = DB.isLow({ ...p, stock: total }) ? 'Yes' : '';
+        const buckets = DB.bucketsOf(moves).filter(b => b.qty !== 0);
+        const base = [pName[p.projectId], p.partNumber || '', p.description || ''];
+        const tail = [total, p.lowStockAt ?? '', low];
+        if (!buckets.length) rows.push([...base, '', '', 0, ...tail]);
+        for (const b of buckets) rows.push([...base, orName(b.location), orName(b.owner), b.qty, ...tail]);
+      }
+      files.push(csvFile(`inventory-stock-${tag}-${toDateInput()}.csv`, rows));
+    }
+    if (which !== 'stock') {
+      const rows = [['Date', 'Time', 'Project', 'Part number', 'Description', 'Type', 'Quantity', 'Location', 'Owner', 'Moved to location', 'Moved to owner', 'Product total after', 'Note', 'Edited']];
+      const all = [];
+      for (const p of products) {
+        let run = 0;
+        for (const m of (byProduct[p.id] || []).slice().sort(chrono)) { run += m.delta; all.push({ m, p, after: run }); }
+      }
+      all.sort((a, b) => chrono(a.m, b.m));
+      for (const { m, p, after } of all) {
+        const d = new Date(m.at);
+        const mv = m.kind === 'move';
+        rows.push([toDateInput(d), m.dateOnly ? '' : hhmm(d), pName[p.projectId], p.partNumber || '', p.description || '',
+          kindWord(m), mv ? m.qty : m.delta, orName(m.location), orName(m.owner),
+          mv ? orName(m.toLocation) : '', mv ? orName(m.toOwner) : '', after, m.note || '', m.edits?.length ? 'Yes' : '']);
+      }
+      files.push(csvFile(`inventory-history-${tag}-${toDateInput()}.csv`, rows));
+    }
+    return { files, products: products.length };
+  }
+
+  async function exportSheet(projectId = '') {
+    const projects = await DB.listProjects();
+    if (!projects.length) { toast('No projects to export yet'); return; }
+    sheet(`<h3>Export to spreadsheet</h3>
+      <p class="desc">Makes CSV files that open in Excel, Google Sheets or Numbers.</p>
+      <form>
+        <label class="field"><span>Project</span>
+          <select class="input" name="proj">
+            <option value="">All projects</option>
+            ${projects.map(p => `<option value="${esc(p.id)}" ${p.id === projectId ? 'selected' : ''}>${esc(p.name)}</option>`).join('')}
+          </select></label>
+        <div class="field"><span>What to export</span>
+          <label class="radio"><input type="radio" name="which" value="both" checked><span><b>Stock and History</b> (2 files)</span></label>
+          <label class="radio"><input type="radio" name="which" value="stock"><span><b>Stock list</b>: what's in stock now, one row per location and owner</span></label>
+          <label class="radio"><input type="radio" name="which" value="history"><span><b>History</b>: every add, remove, move and count, with notes</span></label>
+        </div>
+        <div class="actions"><button type="button" class="btn" data-a="no">Cancel</button><button class="btn primary">Create</button></div>
+      </form>`,
+      (el, close) => {
+        el.querySelector('[data-a=no]').onclick = close;
+        const f = el.querySelector('form');
+        f.onsubmit = async (e) => {
+          e.preventDefault();
+          let made;
+          try { made = await makeCsvFiles(f.elements.proj.value, f.elements.which.value); }
+          catch (err) { console.error(err); toast('Could not make the file'); return; }
+          const pn = projects.find(p => p.id === f.elements.proj.value)?.name;
+          fileReadySheet(made.files, {
+            title: made.files.length > 1 ? 'Files ready' : 'File ready',
+            desc: `${esc(pn || 'All projects')}: ${plural(made.products, 'product')}.`,
+            onSent: (how) => toast(how === 'saved' ? 'Saved to Downloads' : 'Shared'),
+          });
+        };
+      });
+  }
+
+  /** Home screen nudge when there's data and no backup for REMIND_DAYS. */
+  function backupBannerHtml(hasData) {
+    if (!hasData || !backupPrefs.due()) return '';
+    const last = backupPrefs.last();
+    return `<div class="card banner backup-nudge">
+      <div><b>${last ? `Last backup ${esc(ago(last))}` : 'No backup yet'}</b><br>Your inventory is only on this phone. A backup file keeps it safe if the phone is lost or reset.</div>
+      <div class="actions"><button class="btn" data-a="later">Later</button><button class="btn primary" data-a="backup">Back up now</button></div>
+    </div>`;
+  }
+  function wireBackupBanner(frag) {
+    const b = frag.querySelector('.backup-nudge');
+    if (!b) return;
+    b.querySelector('[data-a=backup]').onclick = backupNow;
+    b.querySelector('[data-a=later]').onclick = () => { ls.set('backupSnooze', new Date(Date.now() + DAY).toISOString()); b.remove(); };
+  }
+
   // ---------- settings, what's new, help ----------
   const verLabel = (r) => `Version ${esc(r.version)} · Build ${esc(r.build)}`;
   const fmtDate = (d) => { const t = new Date(`${d}T12:00:00`); return isNaN(t) ? esc(d) : t.toLocaleDateString([], { month: 'long', day: 'numeric', year: 'numeric' }); };
@@ -878,9 +1174,30 @@
       <ul class="changes">${r.changes.map(c => `<li>${esc(c)}</li>`).join('')}</ul>
     </div>`;
 
-  function viewSettings() {
+  async function viewSettings() {
     setChrome({ title: 'Settings', back: '#/' });
-    return h(`<div>
+    const last = backupPrefs.last();
+    const safe = await DB.beforeRestore().catch(() => null);
+    const frag = h(`<div>
+      <h2 class="section">Backup and export</h2>
+      <div class="list">
+        <button class="card row" data-a="backup">
+          <div class="grow"><div class="t">Back up now</div><div class="s ${last && !backupPrefs.due() ? '' : 'low-txt'}">${last ? `Last backup: ${esc(ago(last))}` : 'Never backed up'}</div></div>${ICON.chev}
+        </button>
+        <button class="card row" data-a="restore">
+          <div class="grow"><div class="t">Restore from backup</div><div class="s">Replace this phone's data with a backup file</div></div>${ICON.chev}
+        </button>
+        ${safe ? `<button class="card row" data-a="undo">
+          <div class="grow"><div class="t">Undo last restore</div><div class="s">Put back the data from before the restore on ${esc(fmtStamp(safe.savedAt))}</div></div>${ICON.chev}
+        </button>` : ''}
+        <button class="card row" data-a="csv">
+          <div class="grow"><div class="t">Export to spreadsheet (CSV)</div><div class="s">Stock and History for one project or all, with locations and owners</div></div>${ICON.chev}
+        </button>
+        <label class="card row switch-row">
+          <div class="grow"><div class="t">Backup reminder</div><div class="s">Remind me on the Inventory screen after ${REMIND_DAYS} days without a backup</div></div>
+          <input type="checkbox" class="switch" name="remind" ${backupPrefs.remind() ? 'checked' : ''}>
+        </label>
+      </div>
       <h2 class="section">Updates</h2>
       <div class="list">
         <a class="card row" href="#/settings/new">
@@ -901,6 +1218,16 @@
         <a class="btn primary" href="${COMMITS_URL}" target="_blank" rel="noopener">View all changes on GitHub</a>
       </div>
     </div>`);
+    frag.querySelector('[data-a=backup]').onclick = backupNow;
+    frag.querySelector('[data-a=restore]').onclick = restorePick;
+    frag.querySelector('[data-a=csv]').onclick = () => exportSheet();
+    const u = frag.querySelector('[data-a=undo]');
+    if (u) u.onclick = undoRestore;
+    frag.querySelector('[name=remind]').onchange = (e) => {
+      ls.set('backupReminder', e.target.checked ? 'on' : 'off');
+      toast(e.target.checked ? 'Backup reminder on' : 'Backup reminder off');
+    };
+    return frag;
   }
 
   function viewWhatsNew() {
@@ -931,7 +1258,10 @@
       ['“Not set”', 'Stock recorded before version 1.3 has no location or owner, so it shows as <b>Not set</b>. To sort it out, use <b>⇄ Move</b> to move it to the right location and owner, or tap an old History entry and <b>Edit</b> it.'],
       ['Searching', 'Inside a project, type in the search box to find products by part number or description.'],
       ['Updates', "The app checks for updates whenever you open it. When one arrives, it refreshes once by itself and shows <b>What's New</b>. Your data is not affected. You can see the version and build here in Settings."],
-      ['Your data', 'Everything is stored only on this phone, and nothing is sent anywhere. Deleting the app or clearing the browser data for this site erases it.'],
+      ['Backing up', 'Your inventory is stored only on this phone, so make a backup now and then. Tap <b>⚙ Settings</b> › <b>Back up now</b>. When the backup is ready, tap <b>Share or save…</b> and pick where it goes, for example Google Drive, Files, or an email to yourself. Or tap <b>Save to phone</b> to put it in Downloads. The file holds every project, product, photo, location, owner and History entry. Settings shows when you last backed up, and the Inventory screen reminds you after 7 days (turn this off with <b>Backup reminder</b>).'],
+      ['Restoring a backup', 'Tap <b>⚙ Settings</b> › <b>Restore from backup</b> and pick the backup file. The app shows what is in it before anything changes. Tap <b>Replace</b> to swap everything on this phone for the backup. A safety copy of what was there is kept: if you restored the wrong file, tap <b>Undo last restore</b> in Settings.'],
+      ['Exporting to a spreadsheet', 'Tap <b>⚙ Settings</b> › <b>Export to spreadsheet (CSV)</b>, or open a project and tap <b>⋮</b> › <b>Export to spreadsheet (CSV)</b>. Pick a project or All projects, and what to export: the <b>Stock list</b> (one row per product, location and owner) and/or <b>History</b> (every add, remove, move and count with its date and note). The files open in Excel, Google Sheets or Numbers.'],
+      ['Your data', 'Everything is stored only on this phone, and nothing is sent anywhere unless you share a backup or export file yourself. Deleting the app or clearing the browser data for this site erases it, so keep a recent backup.'],
     ];
     return h(`<div class="help">${topics.map(([t, b]) => `
       <details class="card"><summary>${esc(t)}</summary><p>${b}</p></details>`).join('')}</div>`);
@@ -990,7 +1320,7 @@
       else if (parts[0] === 'i' && parts[1]) node = await viewProduct(parts[1]);
       else if (parts[0] === 'settings' && parts[1] === 'new') node = viewWhatsNew();
       else if (parts[0] === 'settings' && parts[1] === 'help') node = viewHelp();
-      else if (parts[0] === 'settings') node = viewSettings();
+      else if (parts[0] === 'settings') node = await viewSettings();
       else node = await viewHome();
     } catch (err) {
       console.error(err);

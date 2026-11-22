@@ -315,3 +315,27 @@ select.input {
 .name-row:first-child { border-top: 0; }
 .name-row .grow { flex: 1; min-width: 0; font-weight: 600; word-break: break-word; }
 .link-btn.danger { color: var(--out); }
+
+/* ---------- 1.4: backup, restore, CSV export ---------- */
+button.card.row { width: 100%; text-align: left; font: inherit; color: inherit; border: 1px solid var(--line); }
+.switch-row { cursor: pointer; }
+.switch {
+  -webkit-appearance: none; appearance: none; flex: none; position: relative;
+  width: 52px; height: 32px; border-radius: 16px; background: var(--line); margin: 0; cursor: pointer; transition: background .15s;
+}
+.switch::after {
+  content: ''; position: absolute; top: 3px; left: 3px; width: 26px; height: 26px; border-radius: 50%;
+  background: #fff; box-shadow: 0 1px 3px rgba(0,0,0,.3); transition: transform .15s;
+}
+.switch:checked { background: var(--accent); }
+.switch:checked::after { transform: translateX(20px); }
+.switch:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.file-list { background: var(--bg); border: 1px solid var(--line); border-radius: 12px; padding: 10px 12px; margin: 0 0 14px; font-size: 14px; }
+.file-name { font-weight: 650; word-break: break-all; }
+.warn-box { background: var(--out-bg); color: var(--text); border-radius: 12px; padding: 10px 12px; white-space: normal; }
+.radio { display: flex; gap: 10px; align-items: flex-start; padding: 10px 0; border-top: 1px solid var(--line); font-size: 15px; cursor: pointer; }
+.radio:first-of-type { border-top: 0; padding-top: 2px; }
+.radio input { width: 20px; height: 20px; margin: 1px 0 0; flex: none; accent-color: var(--accent); }
+.backup-nudge { color: var(--text); }
+.backup-nudge .actions { margin-bottom: 0; }
+.row .s.low-txt { color: var(--out); font-weight: 700; }
