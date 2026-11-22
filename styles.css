@@ -102,12 +102,11 @@ main { padding-block: 12px calc(110px + var(--safe-b)); padding-left: max(16px, 
   display: grid; place-items: center; font-weight: 700; font-size: 18px;
 }
 
-/* quick stock control on list rows */
-.qty {
-  display: flex; align-items: center; gap: 2px; flex: none;
-}
-.qty .n { min-width: 36px; text-align: center; font-weight: 700; font-size: 18px; font-variant-numeric: tabular-nums; }
-.qty .n.zero { color: var(--out); }
+/* stock count on list rows (tap the row to add or remove) */
+.count { flex: none; min-width: 52px; text-align: right; display: flex; flex-direction: column; align-items: flex-end; }
+.count .n { font-weight: 750; font-size: 20px; line-height: 1.1; font-variant-numeric: tabular-nums; }
+.count .l { font-size: 11px; color: var(--muted); }
+.count.zero .n { color: var(--out); }
 .qbtn {
   width: 40px; height: 40px; border-radius: 20px; border: 1px solid var(--line);
   background: var(--bg); font-size: 22px; font-weight: 600; line-height: 1;
@@ -148,9 +147,12 @@ main { padding-block: 12px calc(110px + var(--safe-b)); padding-left: max(16px, 
 }
 .pn { font-size: 22px; font-weight: 750; margin: 14px 0 2px; word-break: break-word; }
 .desc { color: var(--muted); margin: 0 0 14px; white-space: pre-wrap; word-break: break-word; }
-.stockbox { padding: 16px; display: flex; align-items: center; gap: 12px; }
+.stockbox { padding: 16px; display: flex; align-items: baseline; justify-content: space-between; gap: 12px; }
 .stockbox .lbl { color: var(--muted); font-size: 14px; }
 .stockbox .big { font-size: 40px; font-weight: 800; line-height: 1; font-variant-numeric: tabular-nums; }
+.stockbox .big.zero { color: var(--out); }
+.move-actions .btn { height: 60px; font-size: 18px; }
+.btn:disabled { opacity: .45; }
 .actions { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin: 12px 0 6px; }
 .btn {
   height: 52px; border-radius: 14px; border: 1px solid var(--line); background: var(--card);
@@ -175,9 +177,27 @@ h2.section { font-size: 15px; text-transform: uppercase; letter-spacing: .04em; 
 }
 .hist .d.in { background: var(--in-bg); color: var(--in); }
 .hist .d.out { background: var(--out-bg); color: var(--out); }
+.hist li { cursor: pointer; }
+.hist .what { font-weight: 650; }
 .hist .when { font-size: 14px; color: var(--muted); }
+.tag { font-size: 11px; font-weight: 700; color: var(--muted); border: 1px solid var(--line); border-radius: 8px; padding: 1px 6px; margin-left: 4px; vertical-align: 1px; }
 .hist .note { margin-top: 2px; white-space: pre-wrap; word-break: break-word; }
-.hist .bal { flex: none; color: var(--muted); font-size: 13px; text-align: right; }
+.hist .bal { flex: none; color: var(--muted); font-size: 14px; text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.hist .bal b { color: var(--text); }
+
+/* add / remove / edit form */
+.preview { margin: -4px 2px 14px; color: var(--muted); font-size: 15px; }
+.preview b { color: var(--text); font-variant-numeric: tabular-nums; }
+.preview.bad, .preview b.bad { color: var(--out); }
+.chips { display: flex; flex-wrap: wrap; gap: 8px; margin: -6px 0 14px; align-items: center; }
+.chips-lbl { width: 100%; font-size: 13px; color: var(--muted); }
+.chip { border: 1px solid var(--line); background: var(--bg); color: var(--text); border-radius: 16px; padding: 7px 12px; font-size: 14px; max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.muted { color: var(--muted); }
+.entry { display: grid; grid-template-columns: auto 1fr; gap: 8px 14px; margin: 0 0 8px; }
+.entry dt { color: var(--muted); font-weight: 600; }
+.entry dd { margin: 0; white-space: pre-wrap; word-break: break-word; }
+.edits { margin: 0 0 8px; padding-left: 18px; font-size: 14px; }
+.edits li { margin-bottom: 6px; word-break: break-word; }
 
 /* ---------- forms ---------- */
 .field { display: block; margin-bottom: 14px; }
@@ -251,3 +271,4 @@ textarea.input { min-height: 84px; resize: vertical; }
 .help p { margin: 0; padding: 0 16px 14px; color: var(--muted); }
 .help p b { color: var(--text); }
 a.btn { color: var(--text); }
+input[type="date"].input { display: block; min-height: 48px; -webkit-appearance: none; appearance: none; text-align: left; }

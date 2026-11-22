@@ -6,7 +6,11 @@
  *               barcode, location, lowStockAt, createdAt, updatedAt }
  *               barcode / location / lowStockAt are reserved for step 2 (null for now).
  *   movements { id, productId, projectId, delta (+in / -out), kind ('in'|'out'|'count'),
- *               note, at (ISO time of the event), createdAt }
+ *               note, at (ISO time of the event), dateOnly (true when the user picked a
+ *               past date, so only the date is meaningful), createdAt,
+ *               editedAt + edits[] (earlier versions {delta, at, dateOnly, note, editedAt},
+ *               oldest first; only present once an entry has been edited) }
+ *               New fields are optional, so entries saved by older builds need no migration.
  *
  * Invariant: product.stock === sum(movement.delta) for that product.
  * Every stock change goes through addMovement / deleteMovement so the two never drift.
@@ -167,7 +171,7 @@ const DB = (() => {
   }
 
   /** delta > 0 adds stock, delta < 0 removes. Stock never goes below 0. */
-  async function addMovement({ productId, delta, note = '', at, kind }) {
+  async function addMovement({ productId, delta, note = '', at, dateOnly = false, kind }) {
     const db = await open();
     const tx = db.transaction(['products', 'movements'], 'readwrite');
     const ps = tx.objectStore('products');
@@ -184,6 +188,7 @@ const DB = (() => {
       kind: kind || (delta > 0 ? 'in' : 'out'),
       note: (note || '').trim(), at: at || now(), createdAt: now(),
     };
+    if (dateOnly) m.dateOnly = true;
     tx.objectStore('movements').put(m);
     await done(tx);
     return { product: p, movement: m };
@@ -198,6 +203,54 @@ const DB = (() => {
     s.put(m);
     await done(tx);
     return m;
+  }
+
+  /** Changes an entry's quantity, date and/or note. Stock moves by the difference.
+   *  The previous version is kept in `edits` so the change is on record.
+   *  Rejects (stock unchanged) if the edit would leave stock below 0. */
+  async function updateMovement(id, { delta, at, dateOnly, note }) {
+    const db = await open();
+    const tx = db.transaction(['products', 'movements'], 'readwrite');
+    const ms = tx.objectStore('movements');
+    const m = await reqP(ms.get(id));
+    if (!m) { tx.abort(); throw new Error('Entry not found'); }
+    const ps = tx.objectStore('products');
+    const p = await reqP(ps.get(m.productId));
+    delta = Math.trunc(delta);
+    note = (note || '').trim();
+    dateOnly = !!dateOnly;
+    if (delta === m.delta && at === m.at && dateOnly === !!m.dateOnly && note === m.note) {
+      tx.abort(); return { movement: m, product: p, changed: false };
+    }
+    if (p) {
+      const stock = p.stock - m.delta + delta;
+      if (stock < 0) { tx.abort(); const e = new Error(`That would leave ${stock} in stock`); e.code = 'NEGATIVE'; throw e; }
+      p.stock = stock; p.updatedAt = now(); ps.put(p);
+    }
+    const t = now();
+    m.edits = [...(m.edits || []), { delta: m.delta, at: m.at, dateOnly: !!m.dateOnly, note: m.note, editedAt: t }];
+    m.delta = delta; m.at = at; m.note = note; m.editedAt = t;
+    if (dateOnly) m.dateOnly = true; else delete m.dateOnly;
+    if (m.kind !== 'count') m.kind = delta > 0 ? 'in' : 'out';
+    ms.put(m);
+    await done(tx);
+    return { movement: m, product: p, changed: true };
+  }
+
+  /** Notes used recently in a project, newest first, without duplicates. */
+  async function recentNotes(projectId, limit = 8) {
+    const items = await getAll('movements', 'projectId', projectId);
+    items.sort((a, b) => b.createdAt.localeCompare(a.createdAt));
+    const seen = new Set(), out = [];
+    for (const m of items) {
+      const n = (m.note || '').trim();
+      if (!n || m.kind === 'count' || n === 'Initial stock') continue;
+      const k = n.toLowerCase();
+      if (seen.has(k)) continue;
+      seen.add(k); out.push(n);
+      if (out.length >= limit) break;
+    }
+    return out;
   }
 
   /** Removes an entry and reverses its effect on stock. */
@@ -224,6 +277,6 @@ const DB = (() => {
   return {
     open, listProjects, getProject, saveProject, deleteProject,
     listProducts, getProduct, saveProduct, deleteProduct,
-    listMovements, addMovement, updateMovementNote, deleteMovement, persist,
+    listMovements, addMovement, updateMovement, updateMovementNote, deleteMovement, recentNotes, persist,
   };
 })();

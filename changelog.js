@@ -4,6 +4,21 @@
  * to match (e.g. '1.1-build2'). Builds count up and never reset. */
 window.CHANGELOG = [
   {
+    version: '1.2', build: 3, date: '2026-11-22',
+    title: 'Logged Add and Remove, better History',
+    changes: [
+      'The + and − buttons are gone from the product list. Each product now shows its stock count, and tapping anywhere on it opens the product.',
+      'To change stock, open a product and tap + Add or − Remove. Each one asks for the date (today is filled in), the quantity, and an optional note such as "10 for sections 15A".',
+      'The Add and Remove forms show what the stock will be after the change, and Remove won\'t let you take out more than you have.',
+      'Notes you used recently in the project appear under the note box. Tap one to reuse it instead of retyping it.',
+      'Right after adding or removing, tap Undo at the bottom of the screen if it was a mistake.',
+      'History now shows, for every entry, the date, whether it was added or removed, the quantity, the stock before → after, and the note.',
+      'Tap a History entry to see its details. Edit lets you fix the date, quantity or note: the stock adjusts to match, and the entry is marked "edited" with a record of what it was before. Delete removes it and puts the stock back.',
+      'Entries made for a past date show only the date, since the time of day was not recorded.',
+      'Your existing products and history are kept exactly as they were.',
+    ],
+  },
+  {
     version: '1.1', build: 2, date: '2026-11-21',
     title: "Settings, Help and What's New",
     changes: [
