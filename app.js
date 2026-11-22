@@ -30,20 +30,30 @@
   let urls = [];
   const blobUrl = (b) => { const u = URL.createObjectURL(b); urls.push(u); return u; };
 
-  const fmtWhen = (iso) => {
+  /** "Today, 9:41 PM" · "Yesterday" · "Fri, Nov 20, 3:05 PM". dateOnly leaves the time off. */
+  const fmtWhen = (iso, dateOnly = false) => {
     const d = new Date(iso);
     const today = new Date();
     const y = new Date(); y.setDate(today.getDate() - 1);
-    const time = d.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
-    if (d.toDateString() === today.toDateString()) return `Today, ${time}`;
-    if (d.toDateString() === y.toDateString()) return `Yesterday, ${time}`;
+    const time = dateOnly ? '' : `, ${d.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })}`;
+    if (d.toDateString() === today.toDateString()) return `Today${time}`;
+    if (d.toDateString() === y.toDateString()) return `Yesterday${time}`;
     const sameYear = d.getFullYear() === today.getFullYear();
-    return d.toLocaleDateString([], { weekday: 'short', month: 'short', day: 'numeric', ...(sameYear ? {} : { year: 'numeric' }) }) + `, ${time}`;
+    return d.toLocaleDateString([], { weekday: 'short', month: 'short', day: 'numeric', ...(sameYear ? {} : { year: 'numeric' }) }) + time;
   };
-  const toLocalInput = (d = new Date()) => {
+  /** Local calendar date as YYYY-MM-DD (what <input type="date"> uses). */
+  const toDateInput = (d = new Date()) => {
     const p = (n) => String(n).padStart(2, '0');
-    return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}T${p(d.getHours())}:${p(d.getMinutes())}`;
+    return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`;
   };
+  /** A picked YYYY-MM-DD at the clock time of `timeFrom` (keeps entries on that day in order). */
+  const dateAt = (ymd, timeFrom = new Date()) => {
+    const [y, m, d] = ymd.split('-').map(Number);
+    const t = new Date(timeFrom);
+    return new Date(y, m - 1, d, t.getHours(), t.getMinutes(), t.getSeconds(), t.getMilliseconds()).toISOString();
+  };
+  const signed = (n) => `${n > 0 ? '+' : '−'}${Math.abs(n)}`;
+  const moveLabel = (m) => m.kind === 'count' ? 'Count correction' : m.delta > 0 ? 'Added' : 'Removed';
   const productName = (p) => p.partNumber || p.description || 'Untitled';
   const plural = (n, w) => `${n} ${w}${n === 1 ? '' : 's'}`;
 
@@ -116,67 +126,138 @@
       });
   }
 
-  /** Add / remove stock with quantity, date/time and optional note. */
-  function movementSheet(product, dir) {
+  /** Add stock, remove stock, or edit an existing entry: date, quantity, optional note.
+   *  dir is 'in' or 'out'. Pass `entry` to edit it. Resolves with
+   *  { delta, at, dateOnly, note } or null if cancelled. */
+  async function movementSheet(product, dir, entry = null) {
     const isOut = dir === 'out';
+    const isCount = entry?.kind === 'count';
+    const notes = await DB.recentNotes(product.projectId).catch(() => []);
+    const today = toDateInput();
+    // For an edit, stock without this entry; the new quantity is applied on top of it.
+    const base = entry ? product.stock - entry.delta : product.stock;
+    const startQty = entry ? Math.abs(entry.delta) : 1;
+    const startDate = entry ? toDateInput(new Date(entry.at)) : today;
+    const verb = entry ? 'Save' : isOut ? 'Remove' : 'Add';
+    const title = entry ? `Edit ${isCount ? 'count correction' : isOut ? 'removal' : 'addition'}` : isOut ? 'Remove stock' : 'Add stock';
     return new Promise((resolve) => {
-      sheet(`<h3>${isOut ? 'Remove from' : 'Add to'} stock</h3>
-        <p class="desc" style="margin-top:-8px">${esc(productName(product))} · ${product.stock} in stock</p>
-        <form>
-          <label class="field"><span>Quantity</span>
+      sheet(`<h3>${title}</h3>
+        <p class="desc" style="margin-top:-8px">${esc(productName(product))}</p>
+        <form class="move-form">
+          <label class="field"><span>Date</span>
+            <input class="input" name="date" type="date" value="${startDate}" max="${today}" required>
+          </label>
+          <label class="field"><span>Quantity ${isOut ? 'removed' : 'added'}</span>
             <div class="stepper">
-              <button type="button" class="qbtn minus" data-s="-1">−</button>
-              <input class="input" name="qty" type="number" inputmode="numeric" min="1" step="1" value="1">
-              <button type="button" class="qbtn plus" data-s="1">+</button>
+              <button type="button" class="qbtn minus" data-s="-1" aria-label="One less">−</button>
+              <input class="input" name="qty" type="number" inputmode="numeric" min="1" step="1" value="${startQty}" required>
+              <button type="button" class="qbtn plus" data-s="1" aria-label="One more">+</button>
             </div>
           </label>
+          <div class="preview" aria-live="polite"></div>
           <label class="field"><span>Note (optional)</span>
-            <input class="input" name="note" placeholder="${isOut ? 'e.g. used on job #142' : 'e.g. PO 5521 from supplier'}" autocomplete="off" enterkeyhint="done">
+            <input class="input" name="note" value="${esc(entry?.note)}" placeholder="${isOut ? 'e.g. 10 for sections 15A' : 'e.g. delivery from supplier, PO 5521'}" autocomplete="off" enterkeyhint="done">
           </label>
-          <label class="field"><span>Date &amp; time</span>
-            <input class="input" name="at" type="datetime-local" value="${toLocalInput()}">
-          </label>
+          <div class="chips" hidden></div>
           <div class="actions">
             <button type="button" class="btn" data-a="no">Cancel</button>
-            <button class="btn ${isOut ? 'out' : 'in'}">${isOut ? 'Remove' : 'Add'}</button>
+            <button class="btn ${entry ? 'primary' : isOut ? 'out' : 'in'}">${verb}</button>
           </div>
         </form>`,
         (el, close) => {
           const f = el.querySelector('form');
-          const q = f.elements.qty;
+          const q = f.elements.qty, noteEl = f.elements.note;
+          const preview = el.querySelector('.preview');
+          const chips = el.querySelector('.chips');
+          const qty = () => parseInt(q.value, 10) || 0;
+          const after = () => base + (isOut ? -qty() : qty());
+          const drawPreview = () => {
+            const a = after();
+            preview.innerHTML = `${entry ? 'Stock now' : 'In stock'} <b>${product.stock}</b> → <b class="${a < 0 ? 'bad' : ''}">${a}</b> after`;
+            preview.classList.toggle('bad', a < 0);
+          };
+          const drawChips = () => {
+            const t = noteEl.value.trim().toLowerCase();
+            const list = notes.filter(n => n.toLowerCase() !== t && (!t || n.toLowerCase().includes(t))).slice(0, 5);
+            chips.hidden = !list.length;
+            chips.innerHTML = list.length ? `<span class="chips-lbl">Recent notes</span>` +
+              list.map(n => `<button type="button" class="chip">${esc(n)}</button>`).join('') : '';
+          };
+          chips.onclick = (e) => {
+            const c = e.target.closest('.chip');
+            if (!c) return;
+            noteEl.value = c.textContent; drawChips();
+          };
+          noteEl.oninput = drawChips;
+          q.oninput = drawPreview;
           el.querySelectorAll('[data-s]').forEach(b => b.onclick = () => {
-            q.value = Math.max(1, (parseInt(q.value, 10) || 0) + (+b.dataset.s));
+            q.value = Math.max(1, qty() + (+b.dataset.s)); drawPreview();
           });
+          drawPreview(); drawChips();
           el.querySelector('[data-a=no]').onclick = () => { close(); resolve(null); };
           f.onsubmit = (e) => {
             e.preventDefault();
-            const n = parseInt(q.value, 10);
-            if (!n || n < 1) { q.focus(); return; }
-            if (isOut && n > product.stock) {
-              toast(`Only ${product.stock} in stock`); q.value = product.stock || 1; return;
+            const n = qty();
+            if (n < 1) { toast('Enter a quantity of 1 or more'); q.focus(); return; }
+            if (after() < 0) {
+              toast(`Only ${base} in stock`); q.value = Math.max(1, base); drawPreview(); return;
             }
-            const atEl = f.elements.at;
-            // untouched → exact current time; edited → the chosen date/time
-            const at = atEl.value && atEl.value !== atEl.defaultValue ? new Date(atEl.value).toISOString() : undefined;
+            const date = f.elements.date.value;
+            if (!date) { toast('Pick a date'); return; }
+            if (date > today) { toast("The date can't be in the future"); return; }
+            let at, dateOnly;
+            if (entry && date === startDate) { at = entry.at; dateOnly = !!entry.dateOnly; }
+            else if (!entry && date === today) { at = new Date().toISOString(); dateOnly = false; }
+            else { at = dateAt(date, entry ? new Date(entry.at) : new Date()); dateOnly = true; }
             close();
-            resolve({ delta: isOut ? -n : n, note: f.elements.note.value, at });
+            resolve({ delta: isOut ? -n : n, at, dateOnly, note: noteEl.value });
           };
         });
     });
   }
 
-  /** Quick ±1 with Undo and "Add note" in the toast. */
-  async function quickMove(productId, delta, after) {
-    const { product, movement } = await DB.addMovement({ productId, delta });
-    if (!movement) { toast('Already at 0'); return; }
-    after?.(product);
-    toast(`${delta > 0 ? 'Added' : 'Removed'} 1 · ${product.stock} left`, [
-      { label: 'Note', run: async () => {
-        const note = await textSheet('Add a note', { placeholder: delta > 0 ? 'e.g. PO 5521' : 'e.g. used on job #142', label: 'Save note' });
-        if (note) { await DB.updateMovementNote(movement.id, note); toast('Note saved'); render(); }
-      } },
-      { label: 'Undo', run: async () => { await DB.deleteMovement(movement.id); toast('Undone'); render(); } },
-    ]);
+  /** Details of one History entry, with Edit and Delete. */
+  function entrySheet(product, m, before, after) {
+    const edits = m.edits || [];
+    sheet(`<h3>${moveLabel(m)} ${Math.abs(m.delta)}</h3>
+      <dl class="entry">
+        <dt>Date</dt><dd>${esc(fmtWhen(m.at, m.dateOnly))}</dd>
+        <dt>Stock</dt><dd>${before} → ${after}</dd>
+        <dt>Note</dt><dd>${m.note ? esc(m.note) : '<span class="muted">None</span>'}</dd>
+      </dl>
+      ${edits.length ? `<h2 class="section">Edited ${plural(edits.length, 'time')}</h2>
+        <ul class="edits">${edits.slice().reverse().map((e, i, arr) => {
+          const next = i === 0 ? m : arr[i - 1];
+          const diffs = [];
+          if (e.delta !== next.delta) diffs.push(`quantity ${signed(e.delta)} → ${signed(next.delta)}`);
+          if (e.at !== next.at) diffs.push(`date ${esc(fmtWhen(e.at, e.dateOnly))} → ${esc(fmtWhen(next.at, next.dateOnly))}`);
+          if ((e.note || '') !== (next.note || '')) diffs.push(`note “${esc(e.note || '')}” → “${esc(next.note || '')}”`);
+          return `<li><span class="muted">${esc(fmtWhen(e.editedAt))}:</span> ${diffs.join('; ') || 'no change'}</li>`;
+        }).join('')}</ul>` : ''}
+      <div class="actions">
+        <button class="btn danger" data-a="del">Delete</button>
+        <button class="btn primary" data-a="edit">Edit</button>
+      </div>
+      <button class="btn ghost wide" data-close>Close</button>`,
+      (el, close) => {
+        el.querySelector('[data-close]').onclick = close;
+        el.querySelector('[data-a=edit]').onclick = async () => {
+          close();
+          const r = await movementSheet(product, m.delta > 0 ? 'in' : 'out', m);
+          if (!r) return;
+          try {
+            const { changed } = await DB.updateMovement(m.id, r);
+            toast(changed ? 'Entry updated' : 'No changes');
+          } catch (err) { toast(err.code === 'NEGATIVE' ? `Can't save: ${err.message}` : 'Could not save'); }
+          render();
+        };
+        el.querySelector('[data-a=del]').onclick = async () => {
+          close();
+          if (await confirmSheet('Delete this entry?', `Stock will change by ${signed(-m.delta)} to undo it, and the entry is removed from History.`)) {
+            await DB.deleteMovement(m.id); toast('Entry deleted'); render();
+          }
+        };
+      });
   }
 
   // ---------- photo ----------
@@ -264,35 +345,14 @@
       const q = searchTerm.trim().toLowerCase();
       const shown = q ? products.filter(p => `${p.partNumber} ${p.description}`.toLowerCase().includes(q)) : products;
       list.replaceChildren(h(shown.length ? shown.map(p => `
-        <div class="card row" data-id="${p.id}">
-          <a class="row" style="padding:0;flex:1;min-width:0" href="#/i/${p.id}">
-            ${p.photo ? `<img class="thumb" alt="" src="${blobUrl(p.photo)}">` : `<div class="thumb">${ICON.box}</div>`}
-            <div class="grow"><div class="t">${esc(p.partNumber || '—')}</div><div class="s">${esc(p.description)}</div></div>
-          </a>
-          <div class="qty">
-            <button class="qbtn minus" data-d="-1" aria-label="Remove one" ${p.stock ? '' : 'disabled'}>−</button>
-            <span class="n ${p.stock ? '' : 'zero'}">${p.stock}</span>
-            <button class="qbtn plus" data-d="1" aria-label="Add one">+</button>
-          </div>
-        </div>`).join('') : `<div class="empty">No matches for “${esc(searchTerm)}”.</div>`));
+        <a class="card row" href="#/i/${p.id}">
+          ${p.photo ? `<img class="thumb" alt="" src="${blobUrl(p.photo)}">` : `<div class="thumb">${ICON.box}</div>`}
+          <div class="grow"><div class="t">${esc(p.partNumber || '—')}</div><div class="s">${esc(p.description)}</div></div>
+          <div class="count ${p.stock ? '' : 'zero'}"><span class="n">${p.stock}</span><span class="l">in stock</span></div>
+        </a>`).join('') : `<div class="empty">No matches for “${esc(searchTerm)}”.</div>`));
     };
     drawList();
 
-    list?.addEventListener('click', async (e) => {
-      const b = e.target.closest('.qbtn');
-      if (!b) return;
-      const row = b.closest('[data-id]');
-      const pid = row.dataset.id;
-      await quickMove(pid, +b.dataset.d, (prod) => {
-        const i = products.findIndex(x => x.id === pid);
-        products[i] = { ...products[i], stock: prod.stock };
-        row.querySelector('.n').textContent = prod.stock;
-        row.querySelector('.n').classList.toggle('zero', !prod.stock);
-        row.querySelector('.minus').disabled = !prod.stock;
-        const u = products.reduce((a, p) => a + p.stock, 0);
-        $view.querySelector('.summary').textContent = `${plural(products.length, 'product')} · ${plural(u, 'unit')} in stock`;
-      });
-    });
     const s = frag.querySelector('.search');
     if (s) s.oninput = () => { searchTerm = s.value; drawList(); };
     frag.getElementById('newProd').onclick = () => go(`#/p/${id}/new`);
@@ -404,61 +464,50 @@
       ]),
     });
 
-    // running balance after each entry, newest first
+    // stock before and after each entry, newest first
     let bal = p.stock;
-    const rows = moves.map(m => { const after = bal; bal -= m.delta; return { m, after }; });
+    const rows = moves.map(m => { const after = bal; bal -= m.delta; return { m, before: bal, after }; });
 
     const frag = h(`<div>
       ${p.photo ? `<img class="hero" alt="" src="${blobUrl(p.photo)}">` : `<div class="hero">${ICON.camera}</div>`}
       <div class="pn">${esc(p.partNumber || '—')}</div>
       ${p.description ? `<p class="desc">${esc(p.description)}</p>` : ''}
       <div class="card stockbox">
-        <div style="flex:1"><div class="lbl">In stock</div><div class="big">${p.stock}</div></div>
-        <div class="qty">
-          <button class="qbtn minus" data-d="-1" aria-label="Remove one" ${p.stock ? '' : 'disabled'}>−</button>
-          <button class="qbtn plus" data-d="1" aria-label="Add one">+</button>
-        </div>
+        <div class="lbl">In stock</div><div class="big ${p.stock ? '' : 'zero'}">${p.stock}</div>
       </div>
-      <div class="actions">
-        <button class="btn out" id="rm" ${p.stock ? '' : 'disabled'}>− Remove…</button>
-        <button class="btn in" id="add">+ Add…</button>
+      <div class="actions move-actions">
+        <button class="btn out" id="rm" ${p.stock ? '' : 'disabled'}>− Remove</button>
+        <button class="btn in" id="add">+ Add</button>
       </div>
       <h2 class="section">History</h2>
-      ${rows.length ? `<ul class="card hist">${rows.map(({ m, after }) => `
+      ${rows.length ? `<ul class="card hist">${rows.map(({ m, before, after }) => `
         <li data-id="${m.id}">
-          <div class="d ${m.delta > 0 ? 'in' : 'out'}">${m.delta > 0 ? '+' : '−'}${Math.abs(m.delta)}</div>
+          <div class="d ${m.delta > 0 ? 'in' : 'out'}">${signed(m.delta)}</div>
           <div class="grow" style="flex:1;min-width:0">
-            <div class="when">${fmtWhen(m.at)}${m.kind === 'count' ? ' · count' : ''}</div>
+            <div class="what">${moveLabel(m)} ${Math.abs(m.delta)}${m.editedAt ? ' <span class="tag">edited</span>' : ''}</div>
+            <div class="when">${esc(fmtWhen(m.at, m.dateOnly))}</div>
             ${m.note ? `<div class="note">${esc(m.note)}</div>` : ''}
           </div>
-          <div class="bal">→ ${after}</div>
+          <div class="bal" aria-label="Stock before and after">${before} → <b>${after}</b></div>
         </li>`).join('')}</ul>`
       : `<div class="card empty" style="padding:24px">No stock changes yet.</div>`}
     </div>`);
 
-    frag.querySelectorAll('.stockbox .qbtn').forEach(b => b.onclick = () => quickMove(id, +b.dataset.d, () => render()));
     const doMove = async (dir) => {
       const r = await movementSheet(p, dir);
       if (!r) return;
-      await DB.addMovement({ productId: id, ...r });
-      toast(`${r.delta > 0 ? 'Added' : 'Removed'} ${Math.abs(r.delta)}`);
+      const { product, movement } = await DB.addMovement({ productId: id, ...r });
       render();
+      if (!movement) return;
+      toast(`${r.delta > 0 ? 'Added' : 'Removed'} ${Math.abs(r.delta)} · ${product.stock} in stock`, [
+        { label: 'Undo', run: async () => { await DB.deleteMovement(movement.id); toast('Undone'); render(); } },
+      ]);
     };
     frag.getElementById('rm').onclick = () => doMove('out');
     frag.getElementById('add').onclick = () => doMove('in');
     frag.querySelectorAll('.hist li').forEach(li => li.onclick = () => {
-      const m = moves.find(x => x.id === li.dataset.id);
-      menuSheet(`${m.delta > 0 ? '+' : '−'}${Math.abs(m.delta)} · ${fmtWhen(m.at)}`, [
-        { label: m.note ? 'Edit note' : 'Add note', run: async () => {
-          const note = await textSheet(m.note ? 'Edit note' : 'Add note', { value: m.note, label: 'Save note' });
-          if (note !== null) { await DB.updateMovementNote(m.id, note); render(); }
-        } },
-        { label: 'Delete entry (reverses stock)', danger: true, run: async () => {
-          if (await confirmSheet('Delete this entry?', `Stock will change by ${m.delta > 0 ? '−' : '+'}${Math.abs(m.delta)} to undo it.`)) {
-            await DB.deleteMovement(m.id); render();
-          }
-        } },
-      ]);
+      const r = rows.find(x => x.m.id === li.dataset.id);
+      entrySheet(p, r.m, r.before, r.after);
     });
     return frag;
   }
@@ -516,8 +565,9 @@
       ['Projects', 'Each project keeps its own inventory. On the Inventory screen tap <b>New project</b>. Open a project and tap <b>⋮</b> to rename or delete it.'],
       ['Adding a product', 'Open a project and tap <b>Add product</b>. Tap the photo box to take a picture, enter the model/part number and a description, set the starting quantity, then tap <b>Add product</b>.'],
       ['Photos', 'Tap the photo box to use the camera, or <b>Choose from library</b> for a saved picture. To change a photo later, open the product, tap <b>⋮</b> › <b>Edit product</b>.'],
-      ['Adding and removing stock', 'For one at a time, tap <b>+</b> or <b>−</b> on the product list. The message at the bottom lets you <b>Undo</b> or add a <b>Note</b>. For more than one, open the product and tap <b>+ Add…</b> or <b>− Remove…</b> to enter a quantity, an optional note and the date and time.'],
-      ['History', "Open a product to see every change, newest first, with the stock count after each one. Tap an entry to edit its note or delete it (the stock is put back)."],
+      ['Adding and removing stock', 'Tap a product to open it, then tap <b>+ Add</b> or <b>− Remove</b>. Pick the date (today is filled in), enter the quantity and, if you like, a note such as "10 for sections 15A". The form shows what the stock will be after the change, and won\'t let you remove more than you have. Notes you used recently appear under the note box: tap one to reuse it. Right after saving, tap <b>Undo</b> at the bottom if it was a mistake.'],
+      ['History', "Open a product to see every change, newest first: the date, whether it was added or removed, the quantity, the stock before → after, and the note."],
+      ['Fixing a History entry', 'Tap an entry in History to see its details. Tap <b>Edit</b> to change the date, quantity or note: the stock adjusts to match, and the entry is marked <b>edited</b> with a record of what it was before. Tap <b>Delete</b> to remove the entry and put the stock back.'],
       ['Correcting a count', 'If the count on the shelf is different, open the product, tap <b>⋮</b> › <b>Correct stock count</b> and enter the real number. The difference is saved in History as a "count" entry.'],
       ['Searching', 'Inside a project, type in the search box to find products by part number or description.'],
       ['Updates', "The app checks for updates whenever you open it. When one arrives, it refreshes once by itself and shows <b>What's New</b>. Your data is not affected. You can see the version and build here in Settings."],

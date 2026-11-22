@@ -7,10 +7,12 @@ A phone-first inventory tracker that works offline and installs to your home scr
 
 - **Projects** keep inventory separate per job.
 - **Products** have a photo, model/part number, description and stock count.
-- **One-tap +/−** on the list, with Undo and an optional note.
-- **Add… / Remove…** for larger quantities, a note, and a back-dated time.
-- **History** per product shows every change and the running balance.
-  Tap an entry to edit its note or delete it (stock is reversed).
+- **Add / Remove** on the product page logs each change with a date (defaults to today),
+  a quantity and an optional note. Recent notes are offered as one-tap suggestions,
+  and Undo appears right after saving.
+- **History** per product shows each entry's date, added/removed, quantity,
+  stock before → after and note. Tap an entry to edit its date, quantity or note
+  (stock adjusts; the old values are kept in the entry's `edits`) or to delete it (stock is reversed).
 - **Correct stock count** (⋮ menu on a product) records the difference as a "count" entry.
 
 All data is stored on the phone (IndexedDB). There is no server and no sync.
@@ -43,5 +45,5 @@ When releasing:
 
 ## Data model (for upcoming features)
 Products already carry `barcode`, `location` and `lowStockAt` fields (unused for now) for
-barcode scanning, bins and low-stock alerts. Movements record `delta`, `kind`, `note` and `at`,
+barcode scanning, bins and low-stock alerts. Movements record `delta`, `kind`, `note`, `at` (plus `dateOnly`, `editedAt` and `edits` when used),
 which is what CSV export and backup/restore will read.
