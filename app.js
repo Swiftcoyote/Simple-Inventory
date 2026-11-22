@@ -263,6 +263,10 @@
           ${qtyHtml(`Quantity ${isOut ? 'removed' : 'added'}`, startQty)}
           <div class="preview" aria-live="polite"></div>
           ${noteHtml(entry?.note, isOut ? 'e.g. 10 for sections 15A' : 'e.g. delivery from supplier, PO 5521')}
+          ${entry ? '' : `<label class="field"><span>Low-stock warning (optional)</span>
+            <input class="input" name="lowStockAt" type="number" inputmode="numeric" min="0" step="1" value="${product.lowStockAt ?? ''}" placeholder="Off">
+            <small class="hint low-hint"></small>
+          </label>`}
           <div class="actions">
             <button type="button" class="btn" data-a="no">Cancel</button>
             <button class="btn ${entry ? 'primary' : isOut ? 'out' : 'in'}">${verb}</button>
@@ -287,10 +291,19 @@
             }
             html += `Total ${entry ? 'now' : 'in stock'} <b>${product.stock}</b> → <b class="${totalAfter < 0 ? 'bad' : ''}">${totalAfter}</b> after`;
             preview.innerHTML = html;
+            const lowEl = f.elements.lowStockAt, hint = el.querySelector('.low-hint');
+            if (lowEl && hint) {
+              const lv = lowEl.value.trim() === '' ? null : parseInt(lowEl.value, 10);
+              const on = lv != null && !isNaN(lv) && totalAfter <= lv;
+              hint.textContent = lv == null || isNaN(lv) ? 'Warn when the total is at or below this number. Leave empty for no warning.'
+                : on ? `The total after (${totalAfter}) is at or below ${lv}, so this product will show Low.` : `Warns when the total is ${lv} or less.`;
+              hint.classList.toggle('low-txt', on);
+            }
           };
           const qty = wireCommon(el, f, notes, draw);
           wirePicks(el, draw);
           if (f.elements.from) f.elements.from.onchange = draw;
+          if (f.elements.lowStockAt) f.elements.lowStockAt.oninput = draw;
           draw();
           el.querySelector('[data-a=no]').onclick = () => { close(); resolve(null); };
           f.onsubmit = (e) => {
@@ -305,11 +318,18 @@
               const here = qtyAt(base, pl.location, pl.owner);
               if (n > here) { toast(`Only ${here} at ${placeLabel(pl.location, pl.owner)}`); f.elements.qty.value = Math.max(1, here); draw(); return; }
             }
+            let lowStockAt;            // undefined = unchanged
+            if (f.elements.lowStockAt) {
+              const raw = f.elements.lowStockAt.value.trim();
+              const v = raw === '' ? null : parseInt(raw, 10);
+              if (raw !== '' && (isNaN(v) || v < 0)) { toast('Low-stock warning must be 0 or more'); return; }
+              if (v !== (product.lowStockAt ?? null)) lowStockAt = v;
+            }
             const d = readDate(f, today, entry, startDate);
             if (!d) return;
             if (!isOut) lastPlace.set(product.projectId, pl);
             close();
-            resolve({ delta: isOut ? -n : n, ...d, note: f.elements.note.value, ...pl });
+            resolve({ delta: isOut ? -n : n, ...d, note: f.elements.note.value, ...pl, lowStockAt });
           };
         });
     });
@@ -785,15 +805,20 @@
     const doMove = async (dir) => {
       const r = dir === 'move' ? await moveSheet(p) : await movementSheet(p, dir);
       if (!r) return;
+      const { lowStockAt, ...entry } = r;
       let res;
-      try { res = await DB.addMovement({ productId: id, ...r }); }
+      try {
+        res = await DB.addMovement({ productId: id, ...entry });
+        if (lowStockAt !== undefined) res.product = await DB.setLowStock(id, lowStockAt);
+      }
       catch (err) { toast(err.code === 'NEGATIVE' ? `Can't save: ${err.message}` : 'Could not save'); render(); return; }
       const { product, movement } = res;
       render();
       if (!movement) return;
       const msg = r.kind === 'move' ? `Moved ${r.qty} to ${placeLabel(r.toLocation, r.toOwner)}`
         : `${r.delta > 0 ? 'Added' : 'Removed'} ${Math.abs(r.delta)} · ${product.stock} in stock`;
-      toast(msg + (DB.isLow(product) && r.delta < 0 ? ' · Low stock' : ''), [
+      const lowNote = lowStockAt !== undefined ? (lowStockAt == null ? ' · Warning off' : ` · Warns at ${lowStockAt}`) : '';
+      toast(msg + lowNote + (DB.isLow(product) && r.delta < 0 ? ' · Low stock' : ''), [
         { label: 'Undo', run: async () => { await DB.deleteMovement(movement.id); toast('Undone'); render(); } },
       ]);
     };
@@ -899,7 +924,7 @@
       ['Adding and removing stock', 'Tap a product to open it, then tap <b>+ Add</b> or <b>− Remove</b>. Pick the date (today is filled in), enter the quantity and, if you like, a note such as "10 for sections 15A". Add asks for the location and owner. Remove asks where the stock comes from and won\'t let you take more than that spot holds. The form shows the stock there and the total after the change. Notes you used recently appear under the note box: tap one to reuse it. Right after saving, tap <b>Undo</b> at the bottom if it was a mistake.'],
       ['Locations and owners', 'Stock is counted separately for each location (for example Bin A, Truck) and owner. The product page shows the total and how much is at each one. In the Add form, pick a location and owner, or choose <b>+ New location…</b> / <b>+ New owner…</b> to type a new one. To rename or remove names, open the project and tap <b>⋮</b> › <b>Locations and owners</b>. Renaming updates every entry in the project.'],
       ['Moving stock', 'To move stock between locations or owners (for example from Bin A to the truck), open the product and tap <b>⇄ Move</b>. Pick where it comes from, where it goes, and how many. The total stays the same and History shows one "Moved" entry.'],
-      ['Low-stock warning', 'When adding a product, or later with <b>⋮</b> › <b>Edit product</b>, fill in <b>Low-stock warning</b>. When the total in stock is at or below that number, the product shows a red <b>Low</b> tag, the project shows how many items are low, and <b>Low stock only</b> above the product list shows just those.'],
+      ['Low-stock warning', 'When adding a product, when adding or removing stock, or with <b>⋮</b> › <b>Edit product</b>, fill in <b>Low-stock warning</b>. When the total in stock is at or below that number, the product shows a red <b>Low</b> tag, the project shows how many items are low, and <b>Low stock only</b> above the product list shows just those.'],
       ['History', "Open a product to see every change, newest first: the date, whether it was added, removed or moved, the quantity, the location and owner, the total before → after, and the note."],
       ['Fixing a History entry', 'Tap an entry in History to see its details. Tap <b>Edit</b> to change the date, quantity, location, owner or note: the stock adjusts to match, and the entry is marked <b>edited</b> with a record of what it was before. Tap <b>Delete</b> to remove the entry and put the stock back.'],
       ['Correcting a count', 'If the count on the shelf is different, open the product, tap <b>⋮</b> › <b>Correct stock count</b>, pick the location and owner, and enter the real number there. The difference is saved in History as a "count" entry.'],

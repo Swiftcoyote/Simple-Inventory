@@ -319,6 +319,19 @@ const DB = (() => {
     return rec;
   }
 
+  /** Sets or clears (null) a product's low-stock warning level. */
+  async function setLowStock(id, value) {
+    const db = await open();
+    const tx = db.transaction('products', 'readwrite');
+    const ps = tx.objectStore('products');
+    const p = await reqP(ps.get(id));
+    if (!p) { tx.abort(); throw new Error('Product not found'); }
+    p.lowStockAt = cleanLow(value); p.updatedAt = now();
+    ps.put(p);
+    await done(tx);
+    return p;
+  }
+
   async function deleteProduct(id) {
     const db = await open();
     const tx = db.transaction(['products', 'movements'], 'readwrite');
@@ -445,6 +458,6 @@ const DB = (() => {
     open, listProjects, getProject, saveProject, deleteProject,
     listProducts, getProduct, saveProduct, deleteProduct,
     listMovements, addMovement, setCount, updateMovement, updateMovementNote, deleteMovement, recentNotes, persist,
-    bucketsOf, isLow, addName, renameName, removeName,
+    bucketsOf, isLow, setLowStock, addName, renameName, removeName,
   };
 })();
