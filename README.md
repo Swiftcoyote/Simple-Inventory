@@ -20,6 +20,12 @@ A phone-first inventory tracker that works offline and installs to your home scr
 - **Low-stock warning**: optional number per product; at or below it the product is flagged
   "Low", the project shows a low count, and "Low stock only" filters the list.
 
+- **Backup and export** (Settings): *Back up now* makes one JSON file with everything
+  (photos as data URLs) to share or save; *Restore from backup* replaces all data with a
+  backup file, after keeping a safety copy (*Undo last restore*). *Export to spreadsheet*
+  makes Stock and History CSV files for one project or all, with location and owner columns.
+  A reminder shows on the home screen after 7 days without a backup (can be turned off).
+
 All data is stored on the phone (IndexedDB). There is no server and no sync.
 
 ## Versions
@@ -52,5 +58,11 @@ When releasing:
 See the comment at the top of `db.js`. Movements record `delta`, `kind` (`in`/`out`/`count`/`move`),
 `location`, `owner` (and `toLocation`/`toOwner` for moves), `note`, `at` (plus `dateOnly`, `editedAt`
 and `edits` when used). Stock per place is the sum of entries there; `product.stock` is the total.
-This is what reports, CSV export and backup/restore will read. Products keep an unused `barcode`
+This is what reports, CSV export and backup/restore read.
+
+**Backup file** (`inventory-backup-YYYY-MM-DD.json`): `{ app: "simple-inventory", format: 1, version,
+build, createdAt, counts, data: { projects, products, movements } }`, the stores as-is with each
+`photo` as a data URL. Restore rejects other files, files from a newer build, and damaged files,
+and recomputes each `product.stock` from its entries. The `meta` store (DB version 3) keeps
+`beforeRestore`, the data as it was before the last restore. Products keep an unused `barcode`
 field for barcode scanning.

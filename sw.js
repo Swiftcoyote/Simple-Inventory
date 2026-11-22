@@ -2,7 +2,7 @@
  * Bump VERSION whenever any app file changes so phones pick up the update.
  * Files are fetched with cache:'reload' so a new version never picks up stale
  * copies from the browser's HTTP cache (GitHub Pages caches files for 10 min). */
-const VERSION = '1.3-build4';
+const VERSION = '1.4-build5';
 const CACHE = `inventory-${VERSION}`;
 const SHELL = [
   './', 'index.html', 'styles.css', 'changelog.js', 'db.js', 'app.js', 'manifest.webmanifest',

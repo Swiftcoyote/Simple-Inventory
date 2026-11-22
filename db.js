@@ -12,6 +12,8 @@
  *               past date, so only the date is meaningful), createdAt,
  *               editedAt + edits[] (earlier versions, oldest first; only once edited) }
  *               kind 'move': delta 0, qty moved from (location, owner) to (toLocation, toOwner).
+ *   meta      out-of-line keys. 'beforeRestore' = { savedAt, data: { projects, products,
+ *               movements } }: everything as it was just before the last restore (1.4).
  *
  * Stock is counted per place (location + owner): the sum of entries at that place.
  * Invariants: product.stock === sum(movement.delta) for that product, and no place
@@ -19,7 +21,7 @@
  */
 const DB = (() => {
   const NAME = 'simple-inventory';
-  const VERSION = 2;
+  const VERSION = 3;
   let dbp;
 
   function open() {
@@ -39,7 +41,9 @@ const DB = (() => {
           m.createIndex('at', 'at');
         }
         if (e.oldVersion > 0 && e.oldVersion < 2) reconcile(req.transaction);
-        // Future versions: add `if (e.oldVersion < 3) { ... }` blocks here.
+        // Version 3 (app 1.4): 'meta' holds the safety copy saved before a restore.
+        if (e.oldVersion < 3) db.createObjectStore('meta');
+        // Future versions: add `if (e.oldVersion < 4) { ... }` blocks here.
       };
       req.onsuccess = () => resolve(req.result);
       req.onerror = () => reject(req.error);
@@ -447,6 +451,39 @@ const DB = (() => {
     await change({ movementId: id }, ({ m0 }) => ({ del: [m0.id] }));
   }
 
+  // ---------- backup & restore ----------
+  const DATA_STORES = ['projects', 'products', 'movements'];
+
+  /** Every project, product (photo as a Blob) and entry. */
+  async function exportAll() {
+    const db = await open();
+    const tx = db.transaction(DATA_STORES);
+    const [projects, products, movements] = await Promise.all(DATA_STORES.map(n => reqP(tx.objectStore(n).getAll())));
+    return { projects, products, movements };
+  }
+
+  /** Replaces everything with `data` in one transaction (all or nothing). What was there
+   *  before is kept in meta 'beforeRestore', so the restore can be undone.
+   *  Each product's stock is set from its entries, so the stock invariant holds.
+   *  undo: true puts the safety copy back instead and then removes it. */
+  async function replaceAll(data, { undo = false } = {}) {
+    const sums = {};
+    for (const m of data.movements) sums[m.productId] = (sums[m.productId] || 0) + (m.delta || 0);
+    const db = await open();
+    const tx = db.transaction([...DATA_STORES, 'meta'], 'readwrite');
+    const [projects, products, movements] = await Promise.all(DATA_STORES.map(n => reqP(tx.objectStore(n).getAll())));
+    if (undo) tx.objectStore('meta').delete('beforeRestore');
+    else tx.objectStore('meta').put({ savedAt: now(), data: { projects, products, movements } }, 'beforeRestore');
+    for (const n of DATA_STORES) tx.objectStore(n).clear();
+    for (const p of data.projects) tx.objectStore('projects').put(p);
+    for (const p of data.products) tx.objectStore('products').put({ ...p, stock: sums[p.id] || 0 });
+    for (const m of data.movements) tx.objectStore('movements').put(m);
+    await done(tx);
+  }
+
+  /** The safety copy from before the last restore, or undefined. */
+  const beforeRestore = () => get('meta', 'beforeRestore');
+
   async function persist() {
     try {
       if (navigator.storage?.persisted && await navigator.storage.persisted()) return true;
@@ -459,5 +496,6 @@ const DB = (() => {
     listProducts, getProduct, saveProduct, deleteProduct,
     listMovements, addMovement, setCount, updateMovement, updateMovementNote, deleteMovement, recentNotes, persist,
     bucketsOf, isLow, setLowStock, addName, renameName, removeName,
+    exportAll, replaceAll, beforeRestore,
   };
 })();
