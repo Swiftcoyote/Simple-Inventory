@@ -4,6 +4,14 @@
  * to match (e.g. '1.1-build2'). Builds count up and never reset. */
 window.CHANGELOG = [
   {
+    version: '1.7', build: 8, date: '2026-11-22',
+    title: 'Report preview',
+    changes: [
+      'New Preview report button on the Reports screen. It shows the report full-screen, exactly as the PDF or printout will look: no buttons or filters, on a white page.',
+      'From the preview, tap Print / save PDF to print it or save it as a PDF, or Close to go back and change the dates or filters.',
+    ],
+  },
+  {
     version: '1.6', build: 7, date: '2026-11-22',
     title: 'Reports and who did it',
     changes: [
