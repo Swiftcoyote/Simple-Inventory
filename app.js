@@ -53,7 +53,7 @@
     return new Date(y, m - 1, d, t.getHours(), t.getMinutes(), t.getSeconds(), t.getMilliseconds()).toISOString();
   };
   const signed = (n) => `${n > 0 ? '+' : '−'}${Math.abs(n)}`;
-  const moveLabel = (m) => m.kind === 'count' ? 'Count correction' : m.delta > 0 ? 'Added' : 'Removed';
+  const moveLabel = (m) => m.kind === 'count' ? 'Count correction' : m.kind === 'move' ? 'Moved' : m.delta > 0 ? 'Added' : 'Removed';
   const productName = (p) => p.partNumber || p.description || 'Untitled';
   const plural = (n, w) => `${n} ${w}${n === 1 ? '' : 's'}`;
 
@@ -126,39 +126,143 @@
       });
   }
 
-  /** Add stock, remove stock, or edit an existing entry: date, quantity, optional note.
+  // ---------- locations & owners ----------
+  const NOT_SET = 'Not set';
+  const placeLabel = (l, o) => `${l || NOT_SET} · ${o || NOT_SET}`;
+  const nameHtml = (n) => n ? esc(n) : `<span class="unset">${NOT_SET}</span>`;
+  const placeHtml = (l, o) => `${nameHtml(l)} · ${nameHtml(o)}`;
+  const lastPlace = {
+    get: (pid) => { try { return JSON.parse(ls.get(`lastPlace:${pid}`)) || {}; } catch { return {}; } },
+    set: (pid, v) => ls.set(`lastPlace:${pid}`, JSON.stringify(v)),
+  };
+
+  /** A dropdown of a project's locations or owners, with "+ New …" that opens a text box.
+   *  value: the name to preselect; '' preselects "Not set" (old entries); null = none. */
+  function pickHtml(name, label, names, value, word) {
+    const list = [...names];
+    if (value && !list.includes(value)) list.unshift(value);
+    const sel = value == null ? (list.length ? '__none' : '__new') : value === '' ? '__notset' : value;
+    return `<div class="field pick"><label><span>${label}</span>
+      <select class="input" name="${name}" data-pick>
+        ${list.length ? `<option value="__none" disabled ${sel === '__none' ? 'selected' : ''}>Choose ${word}…</option>` : ''}
+        ${value === '' ? `<option value="__notset" selected>${NOT_SET}</option>` : ''}
+        ${list.map(n => `<option value="${esc(n)}" ${sel === n ? 'selected' : ''}>${esc(n)}</option>`).join('')}
+        <option value="__new" ${sel === '__new' ? 'selected' : ''}>+ New ${word}…</option>
+      </select></label>
+      <input class="input new-name" name="${name}New" placeholder="New ${word} name" autocomplete="off" enterkeyhint="done" ${sel === '__new' ? '' : 'hidden'}>
+    </div>`;
+  }
+  function wirePicks(el, onChange) {
+    el.querySelectorAll('select[data-pick]').forEach(s => {
+      const inp = s.form.elements[`${s.name}New`];
+      s.addEventListener('change', () => {
+        inp.hidden = s.value !== '__new';
+        if (!inp.hidden) setTimeout(() => inp.focus(), 30);
+        onChange?.();
+      });
+      inp.addEventListener('input', () => onChange?.());
+    });
+  }
+  /** The chosen name ('' = Not set), or null when nothing is chosen yet. */
+  function readPick(f, name) {
+    const v = f.elements[name].value;
+    if (v === '__none') return null;
+    if (v === '__notset') return '';
+    if (v === '__new') return f.elements[`${name}New`].value.trim() || null;
+    return v;
+  }
+  /** Dropdown of the places that hold stock: "Bin A · Us (10)". */
+  function fromHtml(buckets, chosen) {
+    const sel = chosen != null ? chosen : buckets.length === 1 ? 0 : -1;
+    return `<label class="field"><span>Take from</span>
+      <select class="input" name="from">
+        ${sel < 0 ? `<option value="" disabled selected>Choose where from…</option>` : ''}
+        ${buckets.map((b, i) => `<option value="${i}" ${i === sel ? 'selected' : ''}>${esc(placeLabel(b.location, b.owner))} (${b.qty})</option>`).join('')}
+      </select></label>`;
+  }
+  const qtyAt = (buckets, l, o) => buckets.find(b => b.location === (l || '') && b.owner === (o || ''))?.qty || 0;
+
+  /** Stock per place for a product, leaving out one entry (the one being edited). */
+  const bucketsWithout = (moves, entry) => DB.bucketsOf(entry ? moves.filter(m => m.id !== entry.id) : moves);
+
+  const dateHtml = (v, today) => `<label class="field"><span>Date</span>
+    <input class="input" name="date" type="date" value="${v}" max="${today}" required></label>`;
+  const qtyHtml = (label, v, min = 1) => `<label class="field"><span>${label}</span>
+    <div class="stepper">
+      <button type="button" class="qbtn minus" data-s="-1" aria-label="One less">−</button>
+      <input class="input" name="qty" type="number" inputmode="numeric" min="${min}" step="1" value="${v}" required>
+      <button type="button" class="qbtn plus" data-s="1" aria-label="One more">+</button>
+    </div></label>`;
+  const noteHtml = (v, ph) => `<label class="field"><span>Note (optional)</span>
+    <input class="input" name="note" value="${esc(v)}" placeholder="${esc(ph)}" autocomplete="off" enterkeyhint="done"></label>
+    <div class="chips" hidden></div>`;
+
+  /** Recent-note chips, the quantity stepper and the date rules shared by every stock form. */
+  function wireCommon(el, f, notes, onQty, min = 1) {
+    const q = f.elements.qty, noteEl = f.elements.note;
+    const chips = el.querySelector('.chips');
+    if (noteEl && chips) {
+      const drawChips = () => {
+        const t = noteEl.value.trim().toLowerCase();
+        const list = notes.filter(n => n.toLowerCase() !== t && (!t || n.toLowerCase().includes(t))).slice(0, 5);
+        chips.hidden = !list.length;
+        chips.innerHTML = list.length ? `<span class="chips-lbl">Recent notes</span>` +
+          list.map(n => `<button type="button" class="chip">${esc(n)}</button>`).join('') : '';
+      };
+      chips.onclick = (e) => { const c = e.target.closest('.chip'); if (c) { noteEl.value = c.textContent; drawChips(); } };
+      noteEl.oninput = drawChips;
+      drawChips();
+    }
+    const qty = () => { const n = parseInt(q.value, 10); return isNaN(n) ? 0 : n; };
+    q.oninput = onQty;
+    el.querySelectorAll('[data-s]').forEach(b => b.onclick = () => { q.value = Math.max(min, qty() + (+b.dataset.s)); onQty(); });
+    return qty;
+  }
+  /** { at, dateOnly } from the date box, or null (with a toast) if it's not valid. */
+  function readDate(f, today, entry, startDate) {
+    const date = f.elements.date.value;
+    if (!date) { toast('Pick a date'); return null; }
+    if (date > today) { toast("The date can't be in the future"); return null; }
+    if (entry && date === startDate) return { at: entry.at, dateOnly: !!entry.dateOnly };
+    if (!entry && date === today) return { at: new Date().toISOString(), dateOnly: false };
+    return { at: dateAt(date, entry ? new Date(entry.at) : new Date()), dateOnly: true };
+  }
+
+  /** Add stock, remove stock, or edit an existing entry: date, place, quantity, optional note.
    *  dir is 'in' or 'out'. Pass `entry` to edit it. Resolves with
-   *  { delta, at, dateOnly, note } or null if cancelled. */
+   *  { delta, at, dateOnly, note, location, owner } or null if cancelled. */
   async function movementSheet(product, dir, entry = null) {
     const isOut = dir === 'out';
     const isCount = entry?.kind === 'count';
-    const notes = await DB.recentNotes(product.projectId).catch(() => []);
+    const [notes, project, moves] = await Promise.all([
+      DB.recentNotes(product.projectId).catch(() => []), DB.getProject(product.projectId), DB.listMovements(product.id),
+    ]);
     const today = toDateInput();
-    // For an edit, stock without this entry; the new quantity is applied on top of it.
-    const base = entry ? product.stock - entry.delta : product.stock;
+    const base = bucketsWithout(moves, entry);        // stock per place without this entry
+    const baseTotal = entry ? product.stock - entry.delta : product.stock;
     const startQty = entry ? Math.abs(entry.delta) : 1;
     const startDate = entry ? toDateInput(new Date(entry.at)) : today;
     const verb = entry ? 'Save' : isOut ? 'Remove' : 'Add';
     const title = entry ? `Edit ${isCount ? 'count correction' : isOut ? 'removal' : 'addition'}` : isOut ? 'Remove stock' : 'Add stock';
+    // Remove: pick one of the places that hold stock. Add: pick location and owner.
+    const sources = isOut ? base.filter(b => b.qty > 0 || (entry && b.location === (entry.location || '') && b.owner === (entry.owner || ''))) : [];
+    if (isOut && entry && !sources.some(b => b.location === (entry.location || '') && b.owner === (entry.owner || ''))) {
+      sources.push({ location: entry.location || '', owner: entry.owner || '', qty: 0 });
+    }
+    const last = lastPlace.get(product.projectId);
+    const startLoc = entry ? (entry.location || '') : (project.locations || []).includes(last.location) ? last.location : null;
+    const startOwner = entry ? (entry.owner || '') : (project.owners || []).includes(last.owner) ? last.owner : null;
+    const startFrom = entry && isOut ? sources.findIndex(b => b.location === (entry.location || '') && b.owner === (entry.owner || '')) : null;
     return new Promise((resolve) => {
       sheet(`<h3>${title}</h3>
         <p class="desc" style="margin-top:-8px">${esc(productName(product))}</p>
         <form class="move-form">
-          <label class="field"><span>Date</span>
-            <input class="input" name="date" type="date" value="${startDate}" max="${today}" required>
-          </label>
-          <label class="field"><span>Quantity ${isOut ? 'removed' : 'added'}</span>
-            <div class="stepper">
-              <button type="button" class="qbtn minus" data-s="-1" aria-label="One less">−</button>
-              <input class="input" name="qty" type="number" inputmode="numeric" min="1" step="1" value="${startQty}" required>
-              <button type="button" class="qbtn plus" data-s="1" aria-label="One more">+</button>
-            </div>
-          </label>
+          ${dateHtml(startDate, today)}
+          ${isOut ? fromHtml(sources, startFrom)
+            : pickHtml('loc', 'Location', project.locations || [], startLoc, 'location') + pickHtml('own', 'Owner', project.owners || [], startOwner, 'owner')}
+          ${qtyHtml(`Quantity ${isOut ? 'removed' : 'added'}`, startQty)}
           <div class="preview" aria-live="polite"></div>
-          <label class="field"><span>Note (optional)</span>
-            <input class="input" name="note" value="${esc(entry?.note)}" placeholder="${isOut ? 'e.g. 10 for sections 15A' : 'e.g. delivery from supplier, PO 5521'}" autocomplete="off" enterkeyhint="done">
-          </label>
-          <div class="chips" hidden></div>
+          ${noteHtml(entry?.note, isOut ? 'e.g. 10 for sections 15A' : 'e.g. delivery from supplier, PO 5521')}
           <div class="actions">
             <button type="button" class="btn" data-a="no">Cancel</button>
             <button class="btn ${entry ? 'primary' : isOut ? 'out' : 'in'}">${verb}</button>
@@ -166,71 +270,205 @@
         </form>`,
         (el, close) => {
           const f = el.querySelector('form');
-          const q = f.elements.qty, noteEl = f.elements.note;
           const preview = el.querySelector('.preview');
-          const chips = el.querySelector('.chips');
-          const qty = () => parseInt(q.value, 10) || 0;
-          const after = () => base + (isOut ? -qty() : qty());
-          const drawPreview = () => {
-            const a = after();
-            preview.innerHTML = `${entry ? 'Stock now' : 'In stock'} <b>${product.stock}</b> → <b class="${a < 0 ? 'bad' : ''}">${a}</b> after`;
-            preview.classList.toggle('bad', a < 0);
+          const place = () => {
+            if (isOut) { const b = sources[parseInt(f.elements.from.value, 10)]; return b ? { location: b.location, owner: b.owner } : null; }
+            const l = readPick(f, 'loc'), o = readPick(f, 'own');
+            return { location: l, owner: o };
           };
-          const drawChips = () => {
-            const t = noteEl.value.trim().toLowerCase();
-            const list = notes.filter(n => n.toLowerCase() !== t && (!t || n.toLowerCase().includes(t))).slice(0, 5);
-            chips.hidden = !list.length;
-            chips.innerHTML = list.length ? `<span class="chips-lbl">Recent notes</span>` +
-              list.map(n => `<button type="button" class="chip">${esc(n)}</button>`).join('') : '';
+          const draw = () => {
+            const n = qty(), pl = place();
+            const totalAfter = baseTotal + (isOut ? -n : n);
+            let html = '';
+            if (pl && pl.location != null && pl.owner != null) {
+              const here = qtyAt(base, pl.location, pl.owner);
+              const hereAfter = here + (isOut ? -n : n);
+              html += `${esc(placeLabel(pl.location, pl.owner))}: <b>${here}</b> → <b class="${hereAfter < 0 ? 'bad' : ''}">${hereAfter}</b><br>`;
+            }
+            html += `Total ${entry ? 'now' : 'in stock'} <b>${product.stock}</b> → <b class="${totalAfter < 0 ? 'bad' : ''}">${totalAfter}</b> after`;
+            preview.innerHTML = html;
           };
-          chips.onclick = (e) => {
-            const c = e.target.closest('.chip');
-            if (!c) return;
-            noteEl.value = c.textContent; drawChips();
-          };
-          noteEl.oninput = drawChips;
-          q.oninput = drawPreview;
-          el.querySelectorAll('[data-s]').forEach(b => b.onclick = () => {
-            q.value = Math.max(1, qty() + (+b.dataset.s)); drawPreview();
-          });
-          drawPreview(); drawChips();
+          const qty = wireCommon(el, f, notes, draw);
+          wirePicks(el, draw);
+          if (f.elements.from) f.elements.from.onchange = draw;
+          draw();
           el.querySelector('[data-a=no]').onclick = () => { close(); resolve(null); };
           f.onsubmit = (e) => {
             e.preventDefault();
+            const pl = place();
+            if (isOut && !pl) { toast('Choose where it comes from'); return; }
+            if (!isOut && pl.location == null) { toast('Choose or type a location'); return; }
+            if (!isOut && pl.owner == null) { toast('Choose or type an owner'); return; }
             const n = qty();
-            if (n < 1) { toast('Enter a quantity of 1 or more'); q.focus(); return; }
-            if (after() < 0) {
-              toast(`Only ${base} in stock`); q.value = Math.max(1, base); drawPreview(); return;
+            if (n < 1) { toast('Enter a quantity of 1 or more'); f.elements.qty.focus(); return; }
+            if (isOut) {
+              const here = qtyAt(base, pl.location, pl.owner);
+              if (n > here) { toast(`Only ${here} at ${placeLabel(pl.location, pl.owner)}`); f.elements.qty.value = Math.max(1, here); draw(); return; }
             }
-            const date = f.elements.date.value;
-            if (!date) { toast('Pick a date'); return; }
-            if (date > today) { toast("The date can't be in the future"); return; }
-            let at, dateOnly;
-            if (entry && date === startDate) { at = entry.at; dateOnly = !!entry.dateOnly; }
-            else if (!entry && date === today) { at = new Date().toISOString(); dateOnly = false; }
-            else { at = dateAt(date, entry ? new Date(entry.at) : new Date()); dateOnly = true; }
+            const d = readDate(f, today, entry, startDate);
+            if (!d) return;
+            if (!isOut) lastPlace.set(product.projectId, pl);
             close();
-            resolve({ delta: isOut ? -n : n, at, dateOnly, note: noteEl.value });
+            resolve({ delta: isOut ? -n : n, ...d, note: f.elements.note.value, ...pl });
           };
         });
     });
   }
 
+  /** Move stock from one place to another (or edit a move). Total stock is unchanged. */
+  async function moveSheet(product, entry = null) {
+    const [notes, project, moves] = await Promise.all([
+      DB.recentNotes(product.projectId).catch(() => []), DB.getProject(product.projectId), DB.listMovements(product.id),
+    ]);
+    const today = toDateInput();
+    const base = bucketsWithout(moves, entry);
+    const same = (b, l, o) => b.location === (l || '') && b.owner === (o || '');
+    const sources = base.filter(b => b.qty > 0 || (entry && same(b, entry.location, entry.owner)));
+    if (entry && !sources.some(b => same(b, entry.location, entry.owner))) sources.push({ location: entry.location || '', owner: entry.owner || '', qty: 0 });
+    const startFrom = entry ? sources.findIndex(b => same(b, entry.location, entry.owner)) : null;
+    const startDate = entry ? toDateInput(new Date(entry.at)) : today;
+    return new Promise((resolve) => {
+      sheet(`<h3>${entry ? 'Edit move' : 'Move stock'}</h3>
+        <p class="desc" style="margin-top:-8px">${esc(productName(product))}</p>
+        <form class="move-form">
+          ${dateHtml(startDate, today)}
+          ${fromHtml(sources, startFrom)}
+          <div class="to-group">
+            <div class="to-lbl">Move to</div>
+            ${pickHtml('loc', 'Location', project.locations || [], entry ? (entry.toLocation || '') : null, 'location')}
+            ${pickHtml('own', 'Owner', project.owners || [], entry ? (entry.toOwner || '') : null, 'owner')}
+          </div>
+          ${qtyHtml('Quantity moved', entry ? entry.qty : 1)}
+          <div class="preview" aria-live="polite"></div>
+          ${noteHtml(entry?.note, 'e.g. loaded on truck for site')}
+          <div class="actions">
+            <button type="button" class="btn" data-a="no">Cancel</button>
+            <button class="btn primary">${entry ? 'Save' : 'Move'}</button>
+          </div>
+        </form>`,
+        (el, close) => {
+          const f = el.querySelector('form');
+          const preview = el.querySelector('.preview');
+          const from = () => sources[parseInt(f.elements.from.value, 10)] || null;
+          // Owner usually stays the same when stock moves: follow the "from" owner until picked.
+          let ownerTouched = !!entry;
+          f.elements.own.addEventListener('change', () => { ownerTouched = true; });
+          const draw = () => {
+            const n = qty(), fr = from(), l = readPick(f, 'loc'), o = readPick(f, 'own');
+            const lines = [];
+            if (fr) lines.push(`${esc(placeLabel(fr.location, fr.owner))}: <b>${fr.qty}</b> → <b class="${fr.qty - n < 0 ? 'bad' : ''}">${fr.qty - n}</b>`);
+            if (l != null && o != null) { const t = qtyAt(base, l, o); lines.push(`${esc(placeLabel(l, o))}: <b>${t}</b> → <b>${t + n}</b>`); }
+            lines.push(`Total stays <b>${product.stock}</b>`);
+            preview.innerHTML = lines.join('<br>');
+          };
+          f.elements.from.onchange = () => {
+            const fr = from();
+            const sel = f.elements.own;
+            if (fr && !ownerTouched && fr.owner && [...sel.options].some(op => op.value === fr.owner)) {
+              sel.value = fr.owner; f.elements.ownNew.hidden = true;
+            }
+            draw();
+          };
+          const qty = wireCommon(el, f, notes, draw);
+          wirePicks(el, draw);
+          if (startFrom == null && sources.length === 1) f.elements.from.onchange();
+          draw();
+          el.querySelector('[data-a=no]').onclick = () => { close(); resolve(null); };
+          f.onsubmit = (e) => {
+            e.preventDefault();
+            const fr = from(), l = readPick(f, 'loc'), o = readPick(f, 'own'), n = qty();
+            if (!fr) { toast('Choose where it comes from'); return; }
+            if (l == null) { toast('Choose or type where it goes'); return; }
+            if (o == null) { toast('Choose or type an owner'); return; }
+            if (fr.location === l && fr.owner === o) { toast('Pick a different location or owner to move to'); return; }
+            if (n < 1) { toast('Enter a quantity of 1 or more'); return; }
+            if (n > fr.qty) { toast(`Only ${fr.qty} at ${placeLabel(fr.location, fr.owner)}`); f.elements.qty.value = Math.max(1, fr.qty); draw(); return; }
+            const d = readDate(f, today, entry, startDate);
+            if (!d) return;
+            close();
+            resolve({ kind: 'move', qty: n, ...d, note: f.elements.note.value, location: fr.location, owner: fr.owner, toLocation: l, toOwner: o });
+          };
+        });
+    });
+  }
+
+  /** Correct the count at one place. */
+  async function countSheet(product) {
+    const [project, moves] = await Promise.all([DB.getProject(product.projectId), DB.listMovements(product.id)]);
+    const buckets = DB.bucketsOf(moves);
+    const held = buckets.filter(b => b.qty > 0);
+    const one = held.length === 1 ? held[0] : null;
+    const hasUnsetLoc = buckets.some(b => !b.location && b.qty), hasUnsetOwn = buckets.some(b => !b.owner && b.qty);
+    return new Promise((resolve) => {
+      sheet(`<h3>Correct stock count</h3>
+        <p class="desc" style="margin-top:-8px">${esc(productName(product))}. Enter what is actually there for one location and owner.</p>
+        <form class="move-form">
+          ${pickHtml('loc', 'Location', project.locations || [], one ? one.location : hasUnsetLoc && !(project.locations || []).length ? '' : null, 'location')}
+          ${pickHtml('own', 'Owner', project.owners || [], one ? one.owner : hasUnsetOwn && !(project.owners || []).length ? '' : null, 'owner')}
+          ${qtyHtml('Actual count here', one ? one.qty : 0, 0)}
+          <div class="preview" aria-live="polite"></div>
+          <div class="actions">
+            <button type="button" class="btn" data-a="no">Cancel</button>
+            <button class="btn primary">Set count</button>
+          </div>
+        </form>`,
+        (el, close) => {
+          const f = el.querySelector('form');
+          // "Not set" stays choosable while old stock sits there.
+          for (const [name, has] of [['loc', hasUnsetLoc], ['own', hasUnsetOwn]]) {
+            const s = f.elements[name];
+            if (has && ![...s.options].some(o => o.value === '__notset')) s.add(new Option(NOT_SET, '__notset'), 1);
+          }
+          const preview = el.querySelector('.preview');
+          const draw = () => {
+            const l = readPick(f, 'loc'), o = readPick(f, 'own');
+            if (l == null || o == null) { preview.textContent = ''; return; }
+            const here = qtyAt(buckets, l, o), n = qty();
+            preview.innerHTML = `Recorded at ${esc(placeLabel(l, o))}: <b>${here}</b> → <b>${n}</b><br>Total <b>${product.stock}</b> → <b>${product.stock - here + n}</b>`;
+          };
+          const qty = wireCommon(el, f, [], draw, 0);
+          wirePicks(el, draw);
+          draw();
+          el.querySelector('[data-a=no]').onclick = () => { close(); resolve(null); };
+          f.onsubmit = (e) => {
+            e.preventDefault();
+            const l = readPick(f, 'loc'), o = readPick(f, 'own'), n = qty();
+            if (l == null) { toast('Choose or type a location'); return; }
+            if (o == null) { toast('Choose or type an owner'); return; }
+            if (n < 0) { toast('Enter 0 or more'); return; }
+            close();
+            resolve({ location: l, owner: o, count: n });
+          };
+        });
+    });
+  }
+
+  const entryPlaceHtml = (m) => m.kind === 'move'
+    ? `${placeHtml(m.location, m.owner)} → ${placeHtml(m.toLocation, m.toOwner)}`
+    : placeHtml(m.location, m.owner);
+
   /** Details of one History entry, with Edit and Delete. */
   function entrySheet(product, m, before, after) {
     const edits = m.edits || [];
-    sheet(`<h3>${moveLabel(m)} ${Math.abs(m.delta)}</h3>
+    const isMove = m.kind === 'move';
+    sheet(`<h3>${moveLabel(m)} ${isMove ? m.qty : Math.abs(m.delta)}</h3>
       <dl class="entry">
         <dt>Date</dt><dd>${esc(fmtWhen(m.at, m.dateOnly))}</dd>
-        <dt>Stock</dt><dd>${before} → ${after}</dd>
+        ${isMove ? `<dt>From</dt><dd>${placeHtml(m.location, m.owner)}</dd><dt>To</dt><dd>${placeHtml(m.toLocation, m.toOwner)}</dd>`
+          : `<dt>Location</dt><dd>${nameHtml(m.location)}</dd><dt>Owner</dt><dd>${nameHtml(m.owner)}</dd>`}
+        <dt>Total</dt><dd>${before} → ${after}</dd>
         <dt>Note</dt><dd>${m.note ? esc(m.note) : '<span class="muted">None</span>'}</dd>
       </dl>
       ${edits.length ? `<h2 class="section">Edited ${plural(edits.length, 'time')}</h2>
         <ul class="edits">${edits.slice().reverse().map((e, i, arr) => {
           const next = i === 0 ? m : arr[i - 1];
           const diffs = [];
-          if (e.delta !== next.delta) diffs.push(`quantity ${signed(e.delta)} → ${signed(next.delta)}`);
+          if (isMove ? e.qty !== next.qty : e.delta !== next.delta) diffs.push(isMove ? `quantity ${e.qty} → ${next.qty}` : `quantity ${signed(e.delta)} → ${signed(next.delta)}`);
           if (e.at !== next.at) diffs.push(`date ${esc(fmtWhen(e.at, e.dateOnly))} → ${esc(fmtWhen(next.at, next.dateOnly))}`);
+          if ((e.location || '') !== (next.location || '')) diffs.push(`${isMove ? 'from ' : ''}location ${esc(e.location || NOT_SET)} → ${esc(next.location || NOT_SET)}`);
+          if ((e.owner || '') !== (next.owner || '')) diffs.push(`${isMove ? 'from ' : ''}owner ${esc(e.owner || NOT_SET)} → ${esc(next.owner || NOT_SET)}`);
+          if (isMove && (e.toLocation || '') !== (next.toLocation || '')) diffs.push(`to location ${esc(e.toLocation || NOT_SET)} → ${esc(next.toLocation || NOT_SET)}`);
+          if (isMove && (e.toOwner || '') !== (next.toOwner || '')) diffs.push(`to owner ${esc(e.toOwner || NOT_SET)} → ${esc(next.toOwner || NOT_SET)}`);
           if ((e.note || '') !== (next.note || '')) diffs.push(`note “${esc(e.note || '')}” → “${esc(next.note || '')}”`);
           return `<li><span class="muted">${esc(fmtWhen(e.editedAt))}:</span> ${diffs.join('; ') || 'no change'}</li>`;
         }).join('')}</ul>` : ''}
@@ -243,7 +481,7 @@
         el.querySelector('[data-close]').onclick = close;
         el.querySelector('[data-a=edit]').onclick = async () => {
           close();
-          const r = await movementSheet(product, m.delta > 0 ? 'in' : 'out', m);
+          const r = isMove ? await moveSheet(product, m) : await movementSheet(product, m.delta > 0 ? 'in' : 'out', m);
           if (!r) return;
           try {
             const { changed } = await DB.updateMovement(m.id, r);
@@ -253,8 +491,12 @@
         };
         el.querySelector('[data-a=del]').onclick = async () => {
           close();
-          if (await confirmSheet('Delete this entry?', `Stock will change by ${signed(-m.delta)} to undo it, and the entry is removed from History.`)) {
-            await DB.deleteMovement(m.id); toast('Entry deleted'); render();
+          const body = isMove ? `The ${m.qty} moved go back to ${placeLabel(m.location, m.owner)}, and the entry is removed from History.`
+            : `Stock at ${placeLabel(m.location, m.owner)} will change by ${signed(-m.delta)} to undo it, and the entry is removed from History.`;
+          if (await confirmSheet('Delete this entry?', body)) {
+            try { await DB.deleteMovement(m.id); toast('Entry deleted'); }
+            catch (err) { toast(err.code === 'NEGATIVE' ? `Can't delete: ${err.message}. Fix the later entry first.` : 'Could not delete'); }
+            render();
           }
         };
       });
@@ -295,7 +537,7 @@
         <a class="card row" href="#/p/${p.id}">
           <div class="proj-icon">${esc((p.name.trim()[0] || '?').toUpperCase())}</div>
           <div class="grow"><div class="t">${esc(p.name)}</div>
-            <div class="s">${plural(p.items, 'product')} · ${plural(p.units, 'unit')} in stock</div></div>
+            <div class="s">${plural(p.items, 'product')} · ${plural(p.units, 'unit')} in stock${p.low ? ` · <b class="low-txt">${p.low} low</b>` : ''}</div></div>
           ${ICON.chev}
         </a>`).join('')}</div>`
       : `<div class="empty">${ICON.box}<b>No projects yet</b>Create a project to start tracking its inventory.</div>`}
@@ -309,13 +551,14 @@
     return frag;
   }
 
-  let searchTerm = '';
+  let searchTerm = '', lowOnly = false;
   async function viewProject(id) {
     const project = await DB.getProject(id);
     if (!project) return notFound();
     setChrome({
       title: project.name, back: '#/',
       menu: () => menuSheet(project.name, [
+        { label: 'Locations and owners', run: () => go(`#/p/${id}/places`) },
         { label: 'Rename project', run: async () => {
           const name = await textSheet('Rename project', { value: project.name });
           if (name) { await DB.saveProject({ id, name }); render(); }
@@ -329,11 +572,16 @@
     });
     const products = await DB.listProducts(id);
     const units = products.reduce((a, p) => a + p.stock, 0);
+    const lowCount = products.filter(DB.isLow).length;
+    if (!lowCount) lowOnly = false;
 
     const frag = h(`<div>
       ${products.length ? `
         <input class="search" type="search" placeholder="Search part # or description" value="${esc(searchTerm)}" autocomplete="off" enterkeyhint="search">
-        <div class="summary">${plural(products.length, 'product')} · ${plural(units, 'unit')} in stock</div>
+        <div class="summary-row">
+          <div class="summary">${plural(products.length, 'product')} · ${plural(units, 'unit')} in stock</div>
+          ${lowCount ? `<button class="filter ${lowOnly ? 'on' : ''}" id="lowOnly" aria-pressed="${lowOnly}">Low stock only (${lowCount})</button>` : ''}
+        </div>
         <div class="list" id="plist"></div>`
       : `<div class="empty">${ICON.camera}<b>No products yet</b>Tap <i>Add product</i> to snap a photo and record a part.</div>`}
       <button class="fab" id="newProd">${ICON.plus}Add product</button>
@@ -343,18 +591,21 @@
     const drawList = () => {
       if (!list) return;
       const q = searchTerm.trim().toLowerCase();
-      const shown = q ? products.filter(p => `${p.partNumber} ${p.description}`.toLowerCase().includes(q)) : products;
+      let shown = q ? products.filter(p => `${p.partNumber} ${p.description}`.toLowerCase().includes(q)) : products;
+      if (lowOnly) shown = shown.filter(DB.isLow);
       list.replaceChildren(h(shown.length ? shown.map(p => `
         <a class="card row" href="#/i/${p.id}">
           ${p.photo ? `<img class="thumb" alt="" src="${blobUrl(p.photo)}">` : `<div class="thumb">${ICON.box}</div>`}
-          <div class="grow"><div class="t">${esc(p.partNumber || '—')}</div><div class="s">${esc(p.description)}</div></div>
-          <div class="count ${p.stock ? '' : 'zero'}"><span class="n">${p.stock}</span><span class="l">in stock</span></div>
-        </a>`).join('') : `<div class="empty">No matches for “${esc(searchTerm)}”.</div>`));
+          <div class="grow"><div class="t">${esc(p.partNumber || '—')}${DB.isLow(p) ? ' <span class="tag low">Low</span>' : ''}</div><div class="s">${esc(p.description)}</div></div>
+          <div class="count ${p.stock ? '' : 'zero'} ${DB.isLow(p) ? 'low' : ''}"><span class="n">${p.stock}</span><span class="l">in stock</span></div>
+        </a>`).join('') : `<div class="empty">${q ? `No matches for “${esc(searchTerm)}”${lowOnly ? ' in low stock' : ''}.` : 'No low-stock products.'}</div>`));
     };
     drawList();
 
     const s = frag.querySelector('.search');
     if (s) s.oninput = () => { searchTerm = s.value; drawList(); };
+    const lo = frag.getElementById('lowOnly');
+    if (lo) lo.onclick = () => { lowOnly = !lowOnly; lo.classList.toggle('on', lowOnly); lo.setAttribute('aria-pressed', lowOnly); drawList(); };
     frag.getElementById('newProd').onclick = () => go(`#/p/${id}/new`);
     return frag;
   }
@@ -368,6 +619,9 @@
     setChrome({ title: existing ? 'Edit product' : 'New product', back: existing ? `#/i/${productId}` : `#/p/${projectId}` });
 
     let photo = existing?.photo;        // Blob | null | undefined
+    const last = lastPlace.get(projectId);
+    const startLoc = (project.locations || []).includes(last.location) ? last.location : null;
+    const startOwner = (project.owners || []).includes(last.owner) ? last.owner : null;
     const frag = h(`<form autocomplete="off">
       <label class="photo-pick" id="pick">
         <div>${ICON.camera}<div>Tap to take a photo</div></div>
@@ -389,7 +643,15 @@
           <button type="button" class="qbtn minus" data-s="-1">−</button>
           <input class="input" name="initialStock" type="number" inputmode="numeric" min="0" step="1" value="0">
           <button type="button" class="qbtn plus" data-s="1">+</button>
-        </div></label>`}
+        </div></label>
+        <div id="startPlace" hidden>
+          ${pickHtml('loc', 'Location', project.locations || [], startLoc, 'location')}
+          ${pickHtml('own', 'Owner', project.owners || [], startOwner, 'owner')}
+        </div>`}
+      <label class="field"><span>Low-stock warning (optional)</span>
+        <input class="input" name="lowStockAt" type="number" inputmode="numeric" min="0" step="1" value="${existing?.lowStockAt ?? ''}" placeholder="Off">
+        <small class="hint">Flag this product when the total in stock is at or below this number. Leave empty for no warning.</small>
+      </label>
       <div class="actions" style="margin-top:20px">
         <button type="button" class="btn" id="cancel">Cancel</button>
         <button class="btn primary">${existing ? 'Save' : 'Add product'}</button>
@@ -419,10 +681,15 @@
     rmBtn.onclick = () => { photo = null; showPhoto(); };
     showPhoto();
 
+    // Starting stock needs a location and owner; those fields show once the quantity is above 0.
+    const startPlace = frag.getElementById('startPlace');
+    const syncStart = () => { if (startPlace) startPlace.hidden = !((parseInt(form.elements.initialStock.value, 10) || 0) > 0); };
     frag.querySelectorAll('[data-s]').forEach(b => b.onclick = () => {
       const q = form.elements.initialStock;
       q.value = Math.max(0, (parseInt(q.value, 10) || 0) + (+b.dataset.s));
+      syncStart();
     });
+    if (startPlace) { form.elements.initialStock.oninput = syncStart; wirePicks(startPlace); }
     frag.getElementById('cancel').onclick = () => $back.click();
 
     form.onsubmit = async (e) => {
@@ -430,9 +697,20 @@
       const partNumber = form.elements.partNumber.value.trim();
       const description = form.elements.description.value.trim();
       if (!partNumber && !description) { toast('Add a part number or description'); form.elements.partNumber.focus(); return; }
+      const lowRaw = form.elements.lowStockAt.value.trim();
+      const lowStockAt = lowRaw === '' ? null : parseInt(lowRaw, 10);
+      if (lowRaw !== '' && (isNaN(lowStockAt) || lowStockAt < 0)) { toast('Low-stock warning must be 0 or more'); return; }
+      const initialStock = existing ? undefined : Math.max(0, parseInt(form.elements.initialStock.value, 10) || 0);
+      let location, owner;
+      if (initialStock > 0) {
+        location = readPick(form, 'loc'); owner = readPick(form, 'own');
+        if (location == null) { toast('Choose or type a location for the starting stock'); return; }
+        if (owner == null) { toast('Choose or type an owner for the starting stock'); return; }
+        lastPlace.set(projectId, { location, owner });
+      }
       const rec = await DB.saveProduct({
         id: existing?.id, projectId, partNumber, description, photo: photo ?? null,
-        initialStock: existing ? undefined : parseInt(form.elements.initialStock.value, 10) || 0,
+        initialStock, location, owner, lowStockAt,
       });
       toast(existing ? 'Saved' : 'Product added');
       goBack(existing ? `#/i/${rec.id}` : `#/p/${projectId}`);
@@ -449,11 +727,12 @@
       menu: () => menuSheet(productName(p), [
         { label: 'Edit product', run: () => go(`#/i/${id}/edit`) },
         { label: 'Correct stock count', run: async () => {
-          const v = await textSheet('Actual count on hand', { value: String(p.stock), label: 'Set count' });
-          if (v === null) return;
-          const n = parseInt(v, 10);
-          if (isNaN(n) || n < 0) { toast('Enter a whole number'); return; }
-          if (n !== p.stock) { await DB.addMovement({ productId: id, delta: n - p.stock, kind: 'count', note: 'Stock count correction' }); }
+          const r = await countSheet(p);
+          if (!r) return;
+          try {
+            const { movement } = await DB.setCount({ productId: id, ...r });
+            toast(movement ? `Count set: ${r.count} at ${placeLabel(r.location, r.owner)}` : 'Count already matches');
+          } catch { toast('Could not save'); }
           render();
         } },
         { label: 'Delete product', danger: true, run: async () => {
@@ -467,25 +746,35 @@
     // stock before and after each entry, newest first
     let bal = p.stock;
     const rows = moves.map(m => { const after = bal; bal -= m.delta; return { m, before: bal, after }; });
+    const places = DB.bucketsOf(moves).filter(b => b.qty !== 0);
+    const low = DB.isLow(p);
 
     const frag = h(`<div>
       ${p.photo ? `<img class="hero" alt="" src="${blobUrl(p.photo)}">` : `<div class="hero">${ICON.camera}</div>`}
       <div class="pn">${esc(p.partNumber || '—')}</div>
       ${p.description ? `<p class="desc">${esc(p.description)}</p>` : ''}
-      <div class="card stockbox">
-        <div class="lbl">In stock</div><div class="big ${p.stock ? '' : 'zero'}">${p.stock}</div>
+      <div class="card stockbox-wrap ${low ? 'is-low' : ''}">
+        <div class="stockbox">
+          <div><div class="lbl">Total in stock</div>
+            ${p.lowStockAt != null ? `<div class="low-line ${low ? 'on' : ''}">${low ? 'Low stock · ' : ''}warns at ${p.lowStockAt} or less</div>` : ''}</div>
+          <div class="big ${p.stock ? '' : 'zero'} ${low ? 'low' : ''}">${p.stock}</div>
+        </div>
+        ${places.length ? `<ul class="places">${places.map(b => `
+          <li><span class="pl">${placeHtml(b.location, b.owner)}</span><b>${b.qty}</b></li>`).join('')}</ul>` : ''}
       </div>
-      <div class="actions move-actions">
+      <div class="move-actions three">
         <button class="btn out" id="rm" ${p.stock ? '' : 'disabled'}>− Remove</button>
+        <button class="btn" id="mv" ${p.stock ? '' : 'disabled'}>⇄ Move</button>
         <button class="btn in" id="add">+ Add</button>
       </div>
       <h2 class="section">History</h2>
       ${rows.length ? `<ul class="card hist">${rows.map(({ m, before, after }) => `
         <li data-id="${m.id}">
-          <div class="d ${m.delta > 0 ? 'in' : 'out'}">${signed(m.delta)}</div>
+          <div class="d ${m.kind === 'move' ? 'mv' : m.delta > 0 ? 'in' : 'out'}">${m.kind === 'move' ? `⇄${m.qty}` : signed(m.delta)}</div>
           <div class="grow" style="flex:1;min-width:0">
-            <div class="what">${moveLabel(m)} ${Math.abs(m.delta)}${m.editedAt ? ' <span class="tag">edited</span>' : ''}</div>
+            <div class="what">${moveLabel(m)} ${m.kind === 'move' ? m.qty : Math.abs(m.delta)}${m.editedAt ? ' <span class="tag">edited</span>' : ''}</div>
             <div class="when">${esc(fmtWhen(m.at, m.dateOnly))}</div>
+            <div class="where">${entryPlaceHtml(m)}</div>
             ${m.note ? `<div class="note">${esc(m.note)}</div>` : ''}
           </div>
           <div class="bal" aria-label="Stock before and after">${before} → <b>${after}</b></div>
@@ -494,20 +783,62 @@
     </div>`);
 
     const doMove = async (dir) => {
-      const r = await movementSheet(p, dir);
+      const r = dir === 'move' ? await moveSheet(p) : await movementSheet(p, dir);
       if (!r) return;
-      const { product, movement } = await DB.addMovement({ productId: id, ...r });
+      let res;
+      try { res = await DB.addMovement({ productId: id, ...r }); }
+      catch (err) { toast(err.code === 'NEGATIVE' ? `Can't save: ${err.message}` : 'Could not save'); render(); return; }
+      const { product, movement } = res;
       render();
       if (!movement) return;
-      toast(`${r.delta > 0 ? 'Added' : 'Removed'} ${Math.abs(r.delta)} · ${product.stock} in stock`, [
+      const msg = r.kind === 'move' ? `Moved ${r.qty} to ${placeLabel(r.toLocation, r.toOwner)}`
+        : `${r.delta > 0 ? 'Added' : 'Removed'} ${Math.abs(r.delta)} · ${product.stock} in stock`;
+      toast(msg + (DB.isLow(product) && r.delta < 0 ? ' · Low stock' : ''), [
         { label: 'Undo', run: async () => { await DB.deleteMovement(movement.id); toast('Undone'); render(); } },
       ]);
     };
     frag.getElementById('rm').onclick = () => doMove('out');
     frag.getElementById('add').onclick = () => doMove('in');
+    frag.getElementById('mv').onclick = () => doMove('move');
     frag.querySelectorAll('.hist li').forEach(li => li.onclick = () => {
       const r = rows.find(x => x.m.id === li.dataset.id);
       entrySheet(p, r.m, r.before, r.after);
+    });
+    return frag;
+  }
+
+  // ---------- locations & owners manager ----------
+  async function viewPlaces(id) {
+    const project = await DB.getProject(id);
+    if (!project) return notFound();
+    setChrome({ title: 'Locations and owners', back: `#/p/${id}` });
+    const section = (kind, title, word, ex) => {
+      const list = project[kind] || [];
+      return `<h2 class="section">${title}</h2>
+        ${list.length ? `<div class="card namelist">${list.map((n, i) => `
+          <div class="name-row"><span class="grow">${esc(n)}</span>
+            <button class="link-btn" data-k="${kind}" data-i="${i}" data-a="ren">Rename</button>
+            <button class="link-btn danger" data-k="${kind}" data-i="${i}" data-a="rm">Remove</button></div>`).join('')}</div>`
+        : `<div class="card banner">No ${word}s yet. Add one here, or type one in when you add stock.</div>`}
+        <button class="btn wide" data-k="${kind}" data-a="add" data-w="${word}" data-ex="${esc(ex)}">+ Add ${word}</button>`;
+    };
+    const frag = h(`<div>
+      <p class="desc">Stock is counted separately for each location and owner. These lists are only for ${esc(project.name)}.</p>
+      ${section('locations', 'Locations', 'location', 'e.g. Bin A, Truck, Site trailer')}
+      ${section('owners', 'Owners', 'owner', 'Who owns the material')}
+    </div>`);
+    frag.querySelectorAll('[data-a]').forEach(b => b.onclick = async () => {
+      const kind = b.dataset.k, name = (project[kind] || [])[+b.dataset.i];
+      const word = kind === 'locations' ? 'location' : 'owner';
+      if (b.dataset.a === 'add') {
+        const v = await textSheet(`New ${word}`, { placeholder: b.dataset.ex, label: 'Add' });
+        if (v) { await DB.addName(id, kind, v); render(); }
+      } else if (b.dataset.a === 'ren') {
+        const v = await textSheet(`Rename ${word}`, { value: name });
+        if (v && v !== name) { await DB.renameName(id, kind, name, v); toast('Renamed everywhere in this project'); render(); }
+      } else if (await confirmSheet(`Remove “${name}”?`, `It won't be offered for new entries. Stock and History already recorded with it stay as they are.`, 'Remove')) {
+        await DB.removeName(id, kind, name); render();
+      }
     });
     return frag;
   }
@@ -565,10 +896,14 @@
       ['Projects', 'Each project keeps its own inventory. On the Inventory screen tap <b>New project</b>. Open a project and tap <b>⋮</b> to rename or delete it.'],
       ['Adding a product', 'Open a project and tap <b>Add product</b>. Tap the photo box to take a picture, enter the model/part number and a description, set the starting quantity, then tap <b>Add product</b>.'],
       ['Photos', 'Tap the photo box to use the camera, or <b>Choose from library</b> for a saved picture. To change a photo later, open the product, tap <b>⋮</b> › <b>Edit product</b>.'],
-      ['Adding and removing stock', 'Tap a product to open it, then tap <b>+ Add</b> or <b>− Remove</b>. Pick the date (today is filled in), enter the quantity and, if you like, a note such as "10 for sections 15A". The form shows what the stock will be after the change, and won\'t let you remove more than you have. Notes you used recently appear under the note box: tap one to reuse it. Right after saving, tap <b>Undo</b> at the bottom if it was a mistake.'],
-      ['History', "Open a product to see every change, newest first: the date, whether it was added or removed, the quantity, the stock before → after, and the note."],
-      ['Fixing a History entry', 'Tap an entry in History to see its details. Tap <b>Edit</b> to change the date, quantity or note: the stock adjusts to match, and the entry is marked <b>edited</b> with a record of what it was before. Tap <b>Delete</b> to remove the entry and put the stock back.'],
-      ['Correcting a count', 'If the count on the shelf is different, open the product, tap <b>⋮</b> › <b>Correct stock count</b> and enter the real number. The difference is saved in History as a "count" entry.'],
+      ['Adding and removing stock', 'Tap a product to open it, then tap <b>+ Add</b> or <b>− Remove</b>. Pick the date (today is filled in), enter the quantity and, if you like, a note such as "10 for sections 15A". Add asks for the location and owner. Remove asks where the stock comes from and won\'t let you take more than that spot holds. The form shows the stock there and the total after the change. Notes you used recently appear under the note box: tap one to reuse it. Right after saving, tap <b>Undo</b> at the bottom if it was a mistake.'],
+      ['Locations and owners', 'Stock is counted separately for each location (for example Bin A, Truck) and owner. The product page shows the total and how much is at each one. In the Add form, pick a location and owner, or choose <b>+ New location…</b> / <b>+ New owner…</b> to type a new one. To rename or remove names, open the project and tap <b>⋮</b> › <b>Locations and owners</b>. Renaming updates every entry in the project.'],
+      ['Moving stock', 'To move stock between locations or owners (for example from Bin A to the truck), open the product and tap <b>⇄ Move</b>. Pick where it comes from, where it goes, and how many. The total stays the same and History shows one "Moved" entry.'],
+      ['Low-stock warning', 'When adding a product, or later with <b>⋮</b> › <b>Edit product</b>, fill in <b>Low-stock warning</b>. When the total in stock is at or below that number, the product shows a red <b>Low</b> tag, the project shows how many items are low, and <b>Low stock only</b> above the product list shows just those.'],
+      ['History', "Open a product to see every change, newest first: the date, whether it was added, removed or moved, the quantity, the location and owner, the total before → after, and the note."],
+      ['Fixing a History entry', 'Tap an entry in History to see its details. Tap <b>Edit</b> to change the date, quantity, location, owner or note: the stock adjusts to match, and the entry is marked <b>edited</b> with a record of what it was before. Tap <b>Delete</b> to remove the entry and put the stock back.'],
+      ['Correcting a count', 'If the count on the shelf is different, open the product, tap <b>⋮</b> › <b>Correct stock count</b>, pick the location and owner, and enter the real number there. The difference is saved in History as a "count" entry.'],
+      ['“Not set”', 'Stock recorded before version 1.3 has no location or owner, so it shows as <b>Not set</b>. To sort it out, use <b>⇄ Move</b> to move it to the right location and owner, or tap an old History entry and <b>Edit</b> it.'],
       ['Searching', 'Inside a project, type in the search box to find products by part number or description.'],
       ['Updates', "The app checks for updates whenever you open it. When one arrives, it refreshes once by itself and shows <b>What's New</b>. Your data is not affected. You can see the version and build here in Settings."],
       ['Your data', 'Everything is stored only on this phone, and nothing is sent anywhere. Deleting the app or clearing the browser data for this site erases it.'],
@@ -624,6 +959,7 @@
     let node;
     try {
       if (parts[0] === 'p' && parts[2] === 'new') node = await viewProductForm(parts[1]);
+      else if (parts[0] === 'p' && parts[2] === 'places') node = await viewPlaces(parts[1]);
       else if (parts[0] === 'p' && parts[1]) node = await viewProject(parts[1]);
       else if (parts[0] === 'i' && parts[2] === 'edit') node = await viewProductForm(null, parts[1]);
       else if (parts[0] === 'i' && parts[1]) node = await viewProduct(parts[1]);

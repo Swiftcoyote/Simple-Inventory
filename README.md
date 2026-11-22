@@ -13,7 +13,12 @@ A phone-first inventory tracker that works offline and installs to your home scr
 - **History** per product shows each entry's date, added/removed, quantity,
   stock before → after and note. Tap an entry to edit its date, quantity or note
   (stock adjusts; the old values are kept in the entry's `edits`) or to delete it (stock is reversed).
-- **Correct stock count** (⋮ menu on a product) records the difference as a "count" entry.
+- **Correct stock count** (⋮ menu on a product) sets the count at one location + owner and records the difference as a "count" entry.
+- **Locations and owners**: stock is counted per location + owner, with a product total.
+  Add asks for both, Remove asks where from, **Move** shifts stock between them. Each project
+  keeps its own lists (⋮ › Locations and owners to rename/remove). Pre-1.3 stock shows as "Not set".
+- **Low-stock warning**: optional number per product; at or below it the product is flagged
+  "Low", the project shows a low count, and "Low stock only" filters the list.
 
 All data is stored on the phone (IndexedDB). There is no server and no sync.
 
@@ -43,7 +48,9 @@ When releasing:
 - `db.js` — storage layer and data model
 - `sw.js` — offline cache. **Bump `VERSION` whenever any file changes** (it matches the build, e.g. `1.1-build2`) so installed phones update.
 
-## Data model (for upcoming features)
-Products already carry `barcode`, `location` and `lowStockAt` fields (unused for now) for
-barcode scanning, bins and low-stock alerts. Movements record `delta`, `kind`, `note`, `at` (plus `dateOnly`, `editedAt` and `edits` when used),
-which is what CSV export and backup/restore will read.
+## Data model
+See the comment at the top of `db.js`. Movements record `delta`, `kind` (`in`/`out`/`count`/`move`),
+`location`, `owner` (and `toLocation`/`toOwner` for moves), `note`, `at` (plus `dateOnly`, `editedAt`
+and `edits` when used). Stock per place is the sum of entries there; `product.stock` is the total.
+This is what reports, CSV export and backup/restore will read. Products keep an unused `barcode`
+field for barcode scanning.

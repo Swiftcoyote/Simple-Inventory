@@ -4,6 +4,22 @@
  * to match (e.g. '1.1-build2'). Builds count up and never reset. */
 window.CHANGELOG = [
   {
+    version: '1.3', build: 4, date: '2026-11-22',
+    title: 'Locations, owners and low-stock warnings',
+    changes: [
+      'Stock is now counted separately for each location (for example Bin A, Truck) and each owner. The product page shows the total, and under it how many are at each location and owner.',
+      'The Add form asks for a location and an owner. Pick one from the list, or choose "+ New location…" or "+ New owner…" to type a new one. The owners list starts empty, so you enter your own names.',
+      'The Remove form asks where the stock comes from (for example "Bin A · GC (10)") and won\'t let you take more than that spot holds.',
+      'New ⇄ Move button on the product page moves stock from one location or owner to another in one step. The total stays the same, and History shows a single "Moved" entry.',
+      'Each project has its own lists. To rename or remove a location or owner, open the project and tap ⋮ › Locations and owners. Renaming updates every entry in the project.',
+      'History shows the location and owner of every entry. Edit an entry to change its location or owner as well as its date, quantity and note.',
+      'Correct stock count now sets the count for one location and owner.',
+      'New low-stock warning: when you add a product (or later with ⋮ › Edit product), enter the number to warn at. When the total is at or below it, the product gets a red "Low" tag and a red count.',
+      'Each project on the Inventory screen shows how many products are low, and a "Low stock only" button above the product list shows just those.',
+      'Your existing products and history are kept. Stock recorded before this update shows as location "Not set" and owner "Not set". Use ⇄ Move or Edit to sort it out whenever you like.',
+    ],
+  },
+  {
     version: '1.2', build: 3, date: '2026-11-22',
     title: 'Logged Add and Remove, better History',
     changes: [
