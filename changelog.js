@@ -4,6 +4,19 @@
  * to match (e.g. '1.1-build2'). Builds count up and never reset. */
 window.CHANGELOG = [
   {
+    version: '1.8', build: 9, date: '2026-11-22',
+    title: 'New layout with tabs',
+    changes: [
+      'New tab bar at the bottom of the screen with Inventory, Reports and Settings. It is in easy reach of your thumb and stays there inside projects and products, so Reports and Settings are always one tap away.',
+      'Swipe left or right on the Inventory, Reports or Settings screen to move to the next tab. Swiping is off inside projects and products, so it won\'t get in the way of scrolling.',
+      'The Reports card is gone from the Inventory screen, which now only shows your projects. Reports has its own tab.',
+      'The ⚙ button at the top is gone. Settings is now a tab, and the Reports row in Settings is gone because it repeated the tab.',
+      'Going back to the Inventory tab opens the project or product you had open. Tap Inventory again for the list of projects.',
+      'In a project, ⋮ › Reports still opens Reports set to that project.',
+      'The tabs hide on the product form and the delete screens, so they can\'t be tapped by accident. Your data is not affected.',
+    ],
+  },
+  {
     version: '1.7', build: 8, date: '2026-11-22',
     title: 'Report preview',
     changes: [

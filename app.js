@@ -11,7 +11,7 @@
   const $title = document.getElementById('title');
   const $back = document.getElementById('backBtn');
   const $menu = document.getElementById('menuBtn');
-  const $settings = document.getElementById('settingsBtn');
+  const $tabbar = document.getElementById('tabbar');
   const $sheetRoot = document.getElementById('sheetRoot');
   const $toast = document.getElementById('toast');
 
@@ -560,27 +560,21 @@
   }
 
   // ---------- chrome ----------
-  function setChrome({ title, back, menu, settings }) {
+  function setChrome({ title, back, menu }) {
     $title.textContent = title;
     document.title = title === 'Inventory' ? 'Simple Inventory' : `${title} · Inventory`;
     $back.hidden = !back;
     $back.onclick = back ? () => goBack(back) : null;
     $menu.hidden = !menu;
     $menu.onclick = menu || null;
-    $settings.hidden = !settings;
-    $settings.onclick = settings ? () => go('#/settings') : null;
   }
 
   // ---------- views ----------
   async function viewHome() {
-    setChrome({ title: 'Inventory', settings: true });
+    setChrome({ title: 'Inventory' });
     const projects = await DB.listProjects();
     const frag = h(`<div>
       ${backupBannerHtml(projects.length > 0)}
-      ${projects.length ? `<a class="card row report-link" href="#/reports">
-          <div class="proj-icon rep-icon">${ICON.chart}</div>
-          <div class="grow"><div class="t">Reports</div><div class="s">Added, used and by whom, for any dates</div></div>${ICON.chev}
-        </a>` : ''}
       ${projects.length ? `<div class="list">${projects.map(p => `
         <a class="card row" href="#/p/${p.id}">
           <div class="proj-icon">${esc((p.name.trim()[0] || '?').toUpperCase())}</div>
@@ -607,7 +601,7 @@
     setChrome({
       title: project.name, back: '#/',
       menu: () => menuSheet(project.name, [
-        { label: 'Reports', run: () => { repState.proj = id; repState.prod = ALL; saveRep(); go('#/reports'); } },
+        { label: 'Reports', run: () => { repState.proj = id; repState.prod = ALL; saveRep(); go('#/reports', true); } },
         { label: 'Locations and owners', run: () => go(`#/p/${id}/places`) },
         { label: 'Export to spreadsheet (CSV)', run: () => exportSheet(id) },
         { label: 'Rename project', run: async () => {
@@ -1534,7 +1528,7 @@
   const setPreview = (on) => document.documentElement.classList.toggle('previewing', on);
 
   async function viewReports() {
-    setChrome({ title: 'Reports', back: '#/' });
+    setChrome({ title: 'Reports' });
     const projects = await DB.listProjects();
     if (!projects.length) return h(`<div class="empty"><b>Nothing to report yet</b>Create a project and add some stock first.</div>`);
     const st = repState;
@@ -1743,18 +1737,15 @@
     </div>`;
 
   async function viewSettings() {
-    setChrome({ title: 'Settings', back: '#/' });
+    setChrome({ title: 'Settings' });
     const last = backupPrefs.last();
     const safe = await DB.beforeRestore().catch(() => null);
     const people = await DB.listPeople().catch(() => []);
     const frag = h(`<div>
-      <h2 class="section">People and reports</h2>
+      <h2 class="section">Team</h2>
       <div class="list">
         <a class="card row" href="#/settings/people">
           <div class="grow"><div class="t">People</div><div class="s">${people.length ? `${esc(people.slice(0, 3).join(', '))}${people.length > 3 ? ` and ${people.length - 3} more` : ''}` : 'Names to pick under Who on Add, Remove and Move'}</div></div>${ICON.chev}
-        </a>
-        <a class="card row" href="#/reports">
-          <div class="grow"><div class="t">Reports</div><div class="s">Added, used and by whom, per product, location, owner and note</div></div>${ICON.chev}
         </a>
       </div>
       <h2 class="section">Backup and export</h2>
@@ -1836,14 +1827,15 @@
   function viewHelp() {
     setChrome({ title: 'Help', back: '#/settings' });
     const topics = [
+      ['Getting around', 'The bar at the bottom of the screen has three tabs: <b>Inventory</b> (your projects and products), <b>Reports</b> and <b>Settings</b>. Tap a tab to switch, or swipe left or right on the Inventory, Reports or Settings screen to move to the next tab. Going back to <b>Inventory</b> takes you to the project or product you had open; tap <b>Inventory</b> again for the list of projects. The tabs hide while you fill in a product form.'],
       ['Projects', 'Each project keeps its own inventory. On the Inventory screen tap <b>New project</b>. Open a project and tap <b>⋮</b> to rename or delete it.'],
-      ['Deleting inventory, projects or all data', 'To delete products but keep their project, tap <b>⚙ Settings</b> › <b>Delete inventory</b>, tick the products (or <b>Select all</b> under a project) and tap <b>Delete</b>. To delete whole projects, tap <b>Delete projects</b>, tick the projects you want gone and tap <b>Delete</b>. To wipe everything, tap <b>Delete all data</b> and type <b>DELETE</b> to confirm. Both offer <b>Back up first</b>. A safety copy is kept, so if it was a mistake, tap <b>Undo</b> straight away or <b>Undo last delete</b> in Settings. Only the last restore or delete can be undone.'],
+      ['Deleting inventory, projects or all data', 'To delete products but keep their project, tap <b>Settings</b> (bottom of the screen) › <b>Delete inventory</b>, tick the products (or <b>Select all</b> under a project) and tap <b>Delete</b>. To delete whole projects, tap <b>Delete projects</b>, tick the projects you want gone and tap <b>Delete</b>. To wipe everything, tap <b>Delete all data</b> and type <b>DELETE</b> to confirm. Both offer <b>Back up first</b>. A safety copy is kept, so if it was a mistake, tap <b>Undo</b> straight away or <b>Undo last delete</b> in Settings. Only the last restore or delete can be undone.'],
       ['Adding a product', 'Open a project and tap <b>Add product</b>. Tap the photo box to take a picture, enter the model/part number and a description, set the starting quantity, then tap <b>Add product</b>.'],
       ['Photos', 'Tap the photo box to use the camera, or <b>Choose from library</b> for a saved picture. To change a photo later, open the product, tap <b>⋮</b> › <b>Edit product</b>.'],
       ['Adding and removing stock', 'Tap a product to open it, then tap <b>+ Add</b> or <b>− Remove</b>. Pick the date (today is filled in), enter the quantity and, if you like, a note such as "10 for sections 15A". Add asks for the location and owner. Remove asks where the stock comes from and won\'t let you take more than that spot holds. The form shows the stock there and the total after the change. Notes you used recently appear under the note box: tap one to reuse it. Right after saving, tap <b>Undo</b> at the bottom if it was a mistake.'],
       ['Locations and owners', 'Stock is counted separately for each location (for example Bin A, Truck) and owner. The product page shows the total and how much is at each one. In the Add form, pick a location and owner, or choose <b>+ New location…</b> / <b>+ New owner…</b> to type a new one. To rename or remove names, open the project and tap <b>⋮</b> › <b>Locations and owners</b>. Renaming updates every entry in the project.'],
-      ['Who (people)', 'Add, Remove, Move and Correct stock count ask <b>Who</b> is doing it. Pick a name, or choose <b>+ New person…</b> to type one. The last name you picked is filled in next time. To rename or remove names, tap <b>⚙ Settings</b> › <b>People</b>. Renaming changes the name on every entry. Entries from before version 1.6 show Who as <b>Not set</b>; tap one in History and <b>Edit</b> it to fill it in.'],
-      ['Reports', 'Tap <b>Reports</b> on the Inventory screen, or open a project and tap <b>⋮</b> › <b>Reports</b>. Pick a project or All projects and the dates (This week, Last week, This month, Last month, Last 30 days, or type your own). Tap <b>Filters</b> to look at one location, owner, person or product. The report shows the totals added and used, then the same per product (with stock at the start and end, and when it was last used), per location, per owner, per person and per note, then every entry with its date, who and note. Tap <b>Preview report</b> to see it exactly as the PDF will look, then <b>Print / save PDF</b> or <b>Close</b>. Tap <b>Print / save PDF</b> to print it or save it as a PDF (on iPhone, tap the Share button on the print screen), or <b>Share spreadsheet</b> for CSV files.'],
+      ['Who (people)', 'Add, Remove, Move and Correct stock count ask <b>Who</b> is doing it. Pick a name, or choose <b>+ New person…</b> to type one. The last name you picked is filled in next time. To rename or remove names, tap <b>Settings</b> (bottom of the screen) › <b>People</b>. Renaming changes the name on every entry. Entries from before version 1.6 show Who as <b>Not set</b>; tap one in History and <b>Edit</b> it to fill it in.'],
+      ['Reports', 'Tap the <b>Reports</b> tab at the bottom of the screen, or open a project and tap <b>⋮</b> › <b>Reports</b>. Pick a project or All projects and the dates (This week, Last week, This month, Last month, Last 30 days, or type your own). Tap <b>Filters</b> to look at one location, owner, person or product. The report shows the totals added and used, then the same per product (with stock at the start and end, and when it was last used), per location, per owner, per person and per note, then every entry with its date, who and note. Tap <b>Preview report</b> to see it exactly as the PDF will look, then <b>Print / save PDF</b> or <b>Close</b>. Tap <b>Print / save PDF</b> to print it or save it as a PDF (on iPhone, tap the Share button on the print screen), or <b>Share spreadsheet</b> for CSV files.'],
       ['Moving stock', 'To move stock between locations or owners (for example from Bin A to the truck), open the product and tap <b>⇄ Move</b>. Pick where it comes from, where it goes, and how many. The total stays the same and History shows one "Moved" entry.'],
       ['Low-stock warning', 'When adding a product, when adding or removing stock, or with <b>⋮</b> › <b>Edit product</b>, fill in <b>Low-stock warning</b>. When the total in stock is at or below that number, the product shows a red <b>Low</b> tag, the project shows how many items are low, and <b>Low stock only</b> above the product list shows just those.'],
       ['History', "Open a product to see every change, newest first: the date, whether it was added, removed or moved, the quantity, the location and owner, the total before → after, and the note."],
@@ -1852,9 +1844,9 @@
       ['“Not set”', 'Stock recorded before version 1.3 has no location or owner, so it shows as <b>Not set</b>. To sort it out, use <b>⇄ Move</b> to move it to the right location and owner, or tap an old History entry and <b>Edit</b> it.'],
       ['Searching', 'Inside a project, type in the search box to find products by part number or description.'],
       ['Updates', "The app checks for updates whenever you open it. When one arrives, it refreshes once by itself and shows <b>What's New</b>. Your data is not affected. You can see the version and build here in Settings."],
-      ['Backing up', 'Your inventory is stored only on this phone, so make a backup now and then. Tap <b>⚙ Settings</b> › <b>Back up now</b>. When the backup is ready, tap <b>Share or save…</b> and pick where it goes, for example Google Drive, Files, or an email to yourself. Or tap <b>Save to phone</b> to put it in Downloads. The file holds every project, product, photo, location, owner and History entry. Settings shows when you last backed up, and the Inventory screen reminds you after 7 days (turn this off with <b>Backup reminder</b>).'],
-      ['Restoring a backup', 'Tap <b>⚙ Settings</b> › <b>Restore from backup</b> and pick the backup file. The app shows what is in it before anything changes. Tap <b>Replace</b> to swap everything on this phone for the backup. A safety copy of what was there is kept: if you restored the wrong file, tap <b>Undo last restore</b> in Settings.'],
-      ['Exporting to a spreadsheet', 'Tap <b>⚙ Settings</b> › <b>Export to spreadsheet (CSV)</b>, or open a project and tap <b>⋮</b> › <b>Export to spreadsheet (CSV)</b>. Pick a project or All projects, and what to export: the <b>Stock list</b> (one row per product, location and owner) and/or <b>History</b> (every add, remove, move and count with its date and note). The files open in Excel, Google Sheets or Numbers.'],
+      ['Backing up', 'Your inventory is stored only on this phone, so make a backup now and then. Tap <b>Settings</b> (bottom of the screen) › <b>Back up now</b>. When the backup is ready, tap <b>Share or save…</b> and pick where it goes, for example Google Drive, Files, or an email to yourself. Or tap <b>Save to phone</b> to put it in Downloads. The file holds every project, product, photo, location, owner and History entry. Settings shows when you last backed up, and the Inventory screen reminds you after 7 days (turn this off with <b>Backup reminder</b>).'],
+      ['Restoring a backup', 'Tap <b>Settings</b> (bottom of the screen) › <b>Restore from backup</b> and pick the backup file. The app shows what is in it before anything changes. Tap <b>Replace</b> to swap everything on this phone for the backup. A safety copy of what was there is kept: if you restored the wrong file, tap <b>Undo last restore</b> in Settings.'],
+      ['Exporting to a spreadsheet', 'Tap <b>Settings</b> (bottom of the screen) › <b>Export to spreadsheet (CSV)</b>, or open a project and tap <b>⋮</b> › <b>Export to spreadsheet (CSV)</b>. Pick a project or All projects, and what to export: the <b>Stock list</b> (one row per product, location and owner) and/or <b>History</b> (every add, remove, move and count with its date and note). The files open in Excel, Google Sheets or Numbers.'],
       ['Your data', 'Everything is stored only on this phone, and nothing is sent anywhere unless you share a backup or export file yourself. Deleting the app or clearing the browser data for this site erases it, so keep a recent backup.'],
     ];
     return h(`<div class="help">${topics.map(([t, b]) => `
@@ -1901,6 +1893,77 @@
     if (replace) { history.replaceState(null, '', hash); render(); } else location.hash = hash;
   }
 
+  // ---------- tabs (1.8) ----------
+  // Three top-level tabs. Switching tabs replaces the history entry instead of
+  // adding one, so the ‹ back button inside a project still goes to the parent
+  // screen. Inventory remembers the project or product you had open.
+  const TABS = ['inv', 'rep', 'set'];
+  const TAB_ROOT = { inv: '#/', rep: '#/reports', set: '#/settings' };
+  const curHash = () => location.hash || '#/';
+  const tabOf = (hash) => /^#\/reports/.test(hash) ? 'rep' : /^#\/settings/.test(hash) ? 'set' : 'inv';
+  const isTabRoot = (hash) => /^(#\/?)?$/.test(hash) || hash === '#/reports' || hash === '#/settings';
+  // forms and the delete screens have their own bottom buttons, so no tab bar there
+  const noTabs = (hash) => /^#\/(p\/[^/]+\/new|i\/[^/]+\/edit|settings\/delete)/.test(hash);
+  let slideDir = 0;
+
+  function updateTabs() {
+    const hash = curHash(), tab = tabOf(hash);
+    if (tab === 'inv' && !noTabs(hash)) ss.set('invHash', hash);
+    const show = !noTabs(hash);
+    $tabbar.hidden = !show;
+    document.body.classList.toggle('has-tabs', show);
+    for (const a of $tabbar.querySelectorAll('a')) {
+      const on = a.dataset.tab === tab;
+      a.classList.toggle('on', on);
+      if (on) a.setAttribute('aria-current', 'page'); else a.removeAttribute('aria-current');
+    }
+  }
+
+  async function switchTab(tab) {
+    const from = tabOf(curHash());
+    let target = TAB_ROOT[tab];
+    if (tab === 'inv' && from !== 'inv') {
+      // back to the project or product that was open, if it still exists
+      const m = (ss.get('invHash') || '').match(/^#\/(p|i)\/([^/]+)$/);
+      if (m && await (m[1] === 'p' ? DB.getProject(m[2]) : DB.getProduct(m[2])).catch(() => null)) target = m[0];
+    }
+    if (target === curHash()) { window.scrollTo({ top: 0, behavior: 'smooth' }); return; }
+    slideDir = Math.sign(TABS.indexOf(tab) - TABS.indexOf(from));
+    go(target, true);
+    reloadIfUpdated();
+  }
+
+  $tabbar.addEventListener('click', (e) => {
+    const a = e.target.closest('a[data-tab]');
+    if (!a) return;
+    e.preventDefault();
+    switchTab(a.dataset.tab);
+  });
+
+  // Swipe left/right on the three main screens to change tab. Not inside a
+  // project (it would fire while scrolling), not from the screen edges (the
+  // phone's own back gesture), and not on text boxes or while a sheet is open.
+  let swipe = null;
+  document.addEventListener('touchstart', (e) => {
+    swipe = null;
+    if (e.touches.length !== 1 || !isTabRoot(curHash()) || $sheetRoot.children.length) return;
+    if (document.documentElement.classList.contains('previewing')) return;
+    const t = e.touches[0];
+    if (t.clientX < 24 || t.clientX > window.innerWidth - 24) return;
+    if (e.target.closest('input, textarea, select, .tabbar, .toast')) return;
+    swipe = { x: t.clientX, y: t.clientY, t: Date.now() };
+  }, { passive: true });
+  document.addEventListener('touchend', (e) => {
+    if (!swipe) return;
+    const t = e.changedTouches[0], dx = t.clientX - swipe.x, dy = t.clientY - swipe.y;
+    const quick = Date.now() - swipe.t < 800;
+    swipe = null;
+    if (!quick || Math.abs(dx) < 60 || Math.abs(dx) < 2 * Math.abs(dy)) return;
+    const i = TABS.indexOf(tabOf(curHash())) + (dx < 0 ? 1 : -1);
+    if (i >= 0 && i < TABS.length) switchTab(TABS[i]);
+  }, { passive: true });
+  document.addEventListener('touchcancel', () => { swipe = null; }, { passive: true });
+
   let renderSeq = 0;
   async function render() {
     const seq = ++renderSeq;
@@ -1930,6 +1993,9 @@
     const y = window.scrollY;
     $view.replaceChildren(node);
     render.lastHash = location.hash;
+    updateTabs();
+    $view.classList.remove('slide-l', 'slide-r');
+    if (slideDir) { void $view.offsetWidth; $view.classList.add(slideDir > 0 ? 'slide-l' : 'slide-r'); slideDir = 0; }
     window.scrollTo(0, keepScroll ? y : 0);
     // free photo URLs no longer on screen
     const live = new Set([...$view.querySelectorAll('img[src^="blob:"]')].map(i => i.getAttribute('src')));
