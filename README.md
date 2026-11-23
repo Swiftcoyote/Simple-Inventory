@@ -11,9 +11,14 @@ A phone-first inventory tracker that works offline and installs to your home scr
   project/product.
 - **Inventory tab** (1.9, `#/inventory`): every product from every project in one list. Products
   that share a part number (case-insensitive) are one item with a combined total. Search, filter
-  by project / storage location / product owner, sort, Low stock only. `#/inventory/<key>`
-  shows the total, per-project stock (tap through to the project's product page) and totals by
-  storage location and product owner.
+  by project / storage location / product owner, sort, Low stock only. `#/inventory/<key>` (1.11)
+  shows the photos, the total, Remove · Move · Add (the form starts with a Project dropdown; adding to a
+  project without the product creates it there, Undo removes it again), **Where it is** (a card per
+  project with a Storage Location / Product Owner / Qty table; tap through to the project's product
+  page) and **Recent activity** (last 5 entries, *See all in Reports* filters Reports to that part number).
+- **Product photos** (1.11): any number per product. `photo` is the main one (lists, thumbnails),
+  `morePhotos` holds the rest (in backups). Edit product › tap a photo to make it main or remove it.
+  Product pages show a swipeable strip; tap for full size.
 - **Names on screen** (1.9): Location is shown as "Storage Location", Owner as "Product Owner",
   Who/People as "Team Member(s)". Stored field names (`location`, `owner`, `person`) are unchanged.
 - **Projects** keep inventory separate per job.
@@ -49,7 +54,9 @@ A phone-first inventory tracker that works offline and installs to your home scr
   then start/added/used/end per product, location and owner, added/used per person and per note,
   and every entry. *Preview report* shows the print layout on screen (`html.previewing`, same rules as print);
   *Print / save PDF* uses the browser's print (print styles hide the controls);
-  *Share spreadsheet* makes a summary CSV and an entries CSV.
+  *Share spreadsheet* makes a summary CSV and an entries CSV. **Stock on hand** (1.11) lists stock at the
+  end date per part number › project › storage location + product owner (also in the summary CSV). With
+  All projects, the Product filter is a part number across projects (`invKey`).
 
 All data is stored on the phone (IndexedDB). There is no server and no sync.
 

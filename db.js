@@ -6,6 +6,8 @@
  *               empty). Since 1.10 they are shown first ("This project") in the pickers;
  *               the full lists are app-wide (meta 'locations' / 'owners').
  *   products  { id, projectId, partNumber, description, photo (Blob|null), stock,
+ *               morePhotos (1.11: [Blob], the extra photos; `photo` is the main one, shown
+ *               in lists; missing = none),
  *               lowStockAt (number|null: flag when stock <= this), barcode, location
  *               (barcode/location unused, kept null), createdAt, updatedAt }
  *   movements { id, productId, projectId, delta (+in / -out), kind ('in'|'out'|'count'|'move'),
@@ -483,6 +485,7 @@ const DB = (() => {
       rec.partNumber = data.partNumber;
       rec.description = data.description;
       if (data.photo !== undefined) rec.photo = data.photo;
+      if (data.morePhotos !== undefined) rec.morePhotos = data.morePhotos || [];
       if (data.lowStockAt !== undefined) rec.lowStockAt = cleanLow(data.lowStockAt);
       rec.updatedAt = now();
       s.put(rec);
@@ -492,7 +495,7 @@ const DB = (() => {
       rec = {
         id: uid(), projectId: data.projectId,
         partNumber: data.partNumber, description: data.description,
-        photo: data.photo || null, stock: initial,
+        photo: data.photo || null, morePhotos: data.morePhotos || [], stock: initial,
         barcode: null, location: null, lowStockAt: cleanLow(data.lowStockAt),
         createdAt: t, updatedAt: t,
       };
