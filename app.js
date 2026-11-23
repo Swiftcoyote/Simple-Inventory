@@ -318,7 +318,7 @@
           ${qtyHtml(`Quantity ${isOut ? 'removed' : 'added'}`, startQty)}
           <div class="preview" aria-live="polite"></div>
           ${noteHtml(entry?.note, isOut ? 'e.g. 10 for sections 15A' : 'e.g. delivery from supplier, PO 5521')}
-          ${entry ? '' : `<label class="field"><span>Low-stock warning (optional)</span>
+          ${entry || isOut ? '' : `<label class="field"><span>Low-stock warning (optional)</span>
             <input class="input" name="lowStockAt" type="number" inputmode="numeric" min="0" step="1" value="${product.lowStockAt ?? ''}" placeholder="Off">
             <small class="hint low-hint"></small>
           </label>`}
@@ -991,6 +991,32 @@
           ${m.note ? `<div class="note">${esc(m.note)}</div>` : ''}
         </div>`;
 
+  /** Low-stock warning (1.13), set from the product pages: one number per project's copy of
+   *  the product. rows = [{ product, name }]. Empty = no warning. */
+  function lowStockSheet(rows) {
+    sheet(`<h3>Low-stock warning</h3>
+      <p class="desc" style="margin-top:-8px">Show <b>Low</b> when the stock is at or below this number. Leave empty for no warning.</p>
+      <form>${rows.map((r, i) => `<label class="field"><span>${esc(r.name)} · ${r.product.stock} in stock</span>
+        <input class="input" name="low${i}" type="number" inputmode="numeric" min="0" step="1" value="${r.product.lowStockAt ?? ''}" placeholder="Off"></label>`).join('')}
+        <div class="actions"><button type="button" class="btn" data-a="no">Cancel</button><button class="btn primary">Save</button></div></form>`,
+      (el, close) => {
+        const f = el.querySelector('form');
+        el.querySelector('[data-a=no]').onclick = close;
+        f.onsubmit = async (e) => {
+          e.preventDefault();
+          const vals = rows.map((r, i) => { const raw = f.elements[`low${i}`].value.trim(); return raw === '' ? null : parseInt(raw, 10); });
+          if (vals.some(v => v != null && (isNaN(v) || v < 0))) { toast('Low-stock warning must be 0 or more'); return; }
+          close();
+          let n = 0;
+          for (const [i, r] of rows.entries()) if (vals[i] !== (r.product.lowStockAt ?? null)) { await DB.setLowStock(r.product.id, vals[i]); n++; }
+          toast(!n ? 'No changes' : rows.length === 1 ? (vals[0] == null ? 'Low-stock warning off' : `Warns at ${vals[0]} or less`) : 'Low-stock warnings saved');
+          render();
+        };
+      });
+  }
+  const lowRowHtml = (text) => `<button type="button" class="low-row" data-a="low">
+      <span class="lr-l">Low-stock warning</span><span class="lr-v">${text}</span>${ICON.chev}</button>`;
+
   /** A product inside one project: its stock there, where it is, and its History. */
   async function viewProduct(id) {
     const p = await DB.getProduct(id);
@@ -1003,6 +1029,7 @@
       menu: () => menuSheet(productName(p), [
         { label: 'Edit product and photos', run: () => go(`#/i/${id}/edit`) },
         ...(item ? [{ label: 'See in all projects', run: () => go(`#/inventory/${encodeURIComponent(item.key)}`, true) }] : []),
+        { label: 'Low-stock warning', run: () => lowStockSheet([{ product: p, name: project?.name || 'This project' }]) },
         { label: 'Correct stock count', run: async () => {
           const r = await countSheet(p);
           if (!r) return;
@@ -1034,10 +1061,11 @@
       <div class="card stockbox-wrap ${low ? 'is-low' : ''}">
         <div class="stockbox">
           <div><div class="lbl strong">In stock in this project${low ? ' <span class="tag low">Low</span>' : ''}</div>
-            <div class="low-line ${low ? 'on' : ''}">${esc(project?.name || '')}${p.lowStockAt != null ? ` · warns at ${p.lowStockAt} or less` : ''}</div></div>
+            <div class="low-line">${esc(project?.name || '')}</div></div>
           <div class="big ${p.stock ? '' : 'zero'} ${low ? 'low' : ''}">${p.stock}</div>
         </div>
         ${places.length ? placeTableHtml(places) : `<div class="ptable-empty">None in stock here.</div>`}
+        ${lowRowHtml(p.lowStockAt != null ? `At ${p.lowStockAt} or less` : 'Off')}
       </div>
       ${actionsHtml(p.stock > 0)}
       ${others > 0 ? `<a class="card row all-link" href="#/inventory/${encodeURIComponent(item.key)}">
@@ -1052,6 +1080,7 @@
 
     wireGallery(frag, photos);
     frag.querySelectorAll('[data-act]').forEach(b => b.onclick = () => stockAction(b.dataset.act, p));
+    frag.querySelector('[data-a=low]').onclick = () => lowStockSheet([{ product: p, name: project?.name || 'This project' }]);
     frag.querySelectorAll('.hist li').forEach(li => li.onclick = () => {
       const r = rows.find(x => x.m.id === li.dataset.id);
       entrySheet(p, r.m, r.before, r.after);
@@ -1223,6 +1252,12 @@
             <div class="low-line">in ${plural(it.rows.length, 'project')} · ${plural(nLoc, 'storage location')}</div></div>
           <div class="big ${it.total ? '' : 'zero'}">${it.total}</div>
         </div>
+        ${lowRowHtml((() => {
+          const set = it.rows.filter(r => r.product.lowStockAt != null);
+          if (!set.length) return 'Off';
+          if (it.rows.length === 1) return `At ${set[0].product.lowStockAt} or less`;
+          return `Set in ${set.length} of ${plural(it.rows.length, 'project')}`;
+        })())}
       </div>
       ${actionsHtml(it.total > 0)}
       <h2 class="section">Where it is</h2>
@@ -1247,6 +1282,7 @@
     </div>`);
 
     wireGallery(frag, it.photos);
+    frag.querySelector('[data-a=low]').onclick = () => lowStockSheet(it.rows.map(r => ({ product: r.product, name: r.project.name })));
     // Add can go to any project (a project without this product gets it); Remove and Move only
     // where there is stock.
     const byProj = new Map(it.rows.map(r => [r.project.id, r]));
@@ -2526,7 +2562,7 @@
       ['Team members', 'Add, Remove, Move and Correct stock count ask which <b>Team Member</b> is doing it. Pick a name, or choose <b>+ New team member…</b> to type one. The last name you picked is filled in next time. To rename or remove names, tap <b>Lists</b> (bottom of the screen) › <b>Team Members</b>. Renaming changes the name on every entry. Entries from before version 1.6 show Team Member as <b>Not set</b>; tap one in History and <b>Edit</b> it to fill it in.'],
       ['Reports', 'Tap the <b>Reports</b> tab at the bottom of the screen, or open a project and tap <b>⋮</b> › <b>Reports</b>. Pick a project or All projects and the dates (This week, Last week, This month, Last month, Last 30 days, or type your own). Tap <b>Filters</b> to look at one storage location, product owner, team member or product. The report shows the totals added and used, then the same per product (with stock at the start and end, and when it was last used), per storage location, per product owner, per team member and per note, then every entry with its date, team member and note. Tap <b>Preview report</b> to see it exactly as the PDF will look, then <b>Print / save PDF</b> or <b>Close</b>. Tap <b>Print / save PDF</b> to print it or save it as a PDF (on iPhone, tap the Share button on the print screen), or <b>Share spreadsheet</b> for CSV files.'],
       ['Moving stock', 'To move stock between storage locations or product owners (for example from Bin A to the truck), open the product and tap <b>⇄ Move</b>. Pick where it comes from, where it goes, and how many. The total stays the same and History shows one "Moved" entry.'],
-      ['Low-stock warning', 'When adding a product, when adding or removing stock, or with <b>⋮</b> › <b>Edit product</b>, fill in <b>Low-stock warning</b>. When the total in stock is at or below that number, the product shows a red <b>Low</b> tag, the project shows how many items are low, and <b>Low stock only</b> above the product list shows just those.'],
+      ['Low-stock warning', 'Open the product and tap <b>Low-stock warning</b> under the stock (or <b>⋮</b> › <b>Low-stock warning</b>). Enter a number: when the stock is at or below it, the product shows a red <b>Low</b> tag, the project shows how many products are low, and <b>Low stock only</b> lists just those. Leave it empty to turn the warning off. On the <b>Inventory</b> tab product page you can set it for each project at once. You can also set it when adding a product, when adding stock, or with <b>⋮</b> › <b>Edit product and photos</b>.'],
       ['History', "Open a product to see every change, newest first: the date, whether it was added, removed or moved, the quantity, the storage location and product owner, the team member, the total before → after, and the note."],
       ['Fixing a History entry', 'Tap an entry in History to see its details. Tap <b>Edit</b> to change the date, quantity, storage location, product owner, team member or note: the stock adjusts to match, and the entry is marked <b>edited</b> with a record of what it was before. Tap <b>Delete</b> to remove the entry and put the stock back.'],
       ['Correcting a count', 'If the count on the shelf is different, open the product, tap <b>⋮</b> › <b>Correct stock count</b>, pick the storage location and product owner, and enter the real number there. The difference is saved in History as a "count" entry.'],
