@@ -2328,13 +2328,13 @@
   }
 
   // ---------- tabs (1.8) ----------
-  // Five top-level tabs (1.10: Projects, Inventory, Reports, Lists, Settings). 'inv' is the
+  // Five top-level tabs (1.10 build 12: Projects, Inventory, Lists, Reports, Settings). 'inv' is the
   // Projects tab (it was called Inventory in 1.8); 'all' is the all-projects Inventory.
   // Lists has three sub-tabs; swiping moves through them before moving to the next tab.
   // Switching tabs replaces the history entry instead of adding one, so the ‹ back
   // button inside a project still goes to the parent screen. Projects remembers the
   // project or product you had open.
-  const TABS = ['inv', 'all', 'rep', 'lst', 'set'];
+  const TABS = ['inv', 'all', 'lst', 'rep', 'set'];
   const TAB_ROOT = { inv: '#/', all: '#/inventory', rep: '#/reports', lst: '#/lists', set: '#/settings' };
   const curHash = () => location.hash || '#/';
   const tabOf = (hash) => /^#\/inventory/.test(hash) ? 'all' : /^#\/reports/.test(hash) ? 'rep' : /^#\/lists/.test(hash) ? 'lst' : /^#\/settings/.test(hash) ? 'set' : 'inv';

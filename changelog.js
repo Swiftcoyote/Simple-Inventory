@@ -4,10 +4,17 @@
  * to match (e.g. '1.1-build2'). Builds count up and never reset. */
 window.CHANGELOG = [
   {
+    version: '1.10', build: 12, date: '2026-11-23',
+    title: 'Lists tab moved',
+    changes: [
+      'The Lists tab is now next to Inventory, before Reports. The bottom bar is Projects, Inventory, Lists, Reports, Settings. Swiping follows the same order.',
+    ],
+  },
+  {
     version: '1.10', build: 11, date: '2026-11-23',
     title: 'New Lists tab, location photos and project owners',
     changes: [
-      'New Lists tab at the bottom of the screen, between Reports and Settings. It has three parts across the top: Storage Locations, Product Owners and Team Members. Tap one, or swipe left and right to move between them.',
+      'New Lists tab at the bottom of the screen. It has three parts across the top: Storage Locations, Product Owners and Team Members. Tap one, or swipe left and right to move between them.',
       'Storage locations and product owners are now one list for the whole app, so every project can use them. The names your projects already had were combined into these lists. Nothing was lost.',
       'Each project still remembers the names it uses. On the Add, Remove, Move and Count forms, those names show first under This project, and the rest of the list shows below them.',
       'Tap a storage location to open its page. You can add as many photos as you like (camera or library) and give each one a name, like Door or Shelves. Tap a photo to see it full size and swipe through them. The page also shows everything stored there, in every project.',
