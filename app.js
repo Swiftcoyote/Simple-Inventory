@@ -137,24 +137,41 @@
     set: (pid, v) => ls.set(`lastPlace:${pid}`, JSON.stringify(v)),
   };
 
-  // People (1.6): one app-wide list in Settings › People. The last name picked on this
+  // People (1.6): one app-wide list (Lists › Team Members since 1.10). The last name picked on this
   // phone is preselected, so a person using their own phone picks it once.
   const lastPerson = { get: () => ls.get('lastPerson') || '', set: (v) => { if (v) ls.set('lastPerson', v); } };
   const personStart = (people, entry) => entry ? (entry.person || '') : people.includes(lastPerson.get()) ? lastPerson.get() : null;
   const personHtml = (people, entry) => pickHtml('who', 'Team Member', people, personStart(people, entry), 'team member');
   const WHO_MSG = 'Choose or type the team member doing this';
 
-  /** A dropdown of a project's locations or owners, with "+ New …" that opens a text box.
+  // Storage locations and product owners (1.10): one app-wide list of each, loaded on
+  // every render. Each project's own names (project.locations / owners) show first.
+  let NAMES = { locations: [], owners: [] };
+  const refreshNames = async () => { NAMES = await DB.listNames().catch(() => NAMES); };
+  const nameSort = (a, b) => a.localeCompare(b, undefined, { numeric: true, sensitivity: 'base' });
+  /** For pickHtml: { all, top } where top is what this project uses. */
+  const namesFor = (project, kind) => ({ all: NAMES[kind], top: project?.[kind] || [] });
+  /** The project's product owner when it has exactly one (preselected on new stock). */
+  const soleOwner = (project) => (project?.owners || []).length === 1 ? project.owners[0] : null;
+  const locPick = (project, value) => pickHtml('loc', 'Storage Location', namesFor(project, 'locations'), value, 'storage location');
+  const ownPick = (project, value) => pickHtml('own', 'Product Owner', namesFor(project, 'owners'), value, 'product owner');
+
+  /** A dropdown of names with "+ New …" that opens a text box. names is a list, or
+   *  { all, top }: top (the project's own names) shows first under "This project".
    *  value: the name to preselect; '' preselects "Not set" (old entries); null = none. */
   function pickHtml(name, label, names, value, word) {
-    const list = [...names];
-    if (value && !list.includes(value)) list.unshift(value);
+    const all = Array.isArray(names) ? names : names.all || [];
+    const top = Array.isArray(names) ? [] : [...new Set(names.top || [])].sort(nameSort);
+    const rest = all.filter(n => !top.includes(n));
+    if (value && !top.includes(value) && !rest.includes(value)) (top.length ? top : rest).unshift(value);
+    const list = [...top, ...rest];
     const sel = value == null ? (list.length ? '__none' : '__new') : value === '' ? '__notset' : value;
+    const opts = (l) => l.map(n => `<option value="${esc(n)}" ${sel === n ? 'selected' : ''}>${esc(n)}</option>`).join('');
     return `<div class="field pick"><label><span>${label}</span>
       <select class="input" name="${name}" data-pick>
         ${list.length ? `<option value="__none" disabled ${sel === '__none' ? 'selected' : ''}>Choose ${word}…</option>` : ''}
         ${value === '' ? `<option value="__notset" selected>${NOT_SET}</option>` : ''}
-        ${list.map(n => `<option value="${esc(n)}" ${sel === n ? 'selected' : ''}>${esc(n)}</option>`).join('')}
+        ${top.length && rest.length ? `<optgroup label="This project">${opts(top)}</optgroup><optgroup label="Other ${word}s">${opts(rest)}</optgroup>` : opts(list)}
         <option value="__new" ${sel === '__new' ? 'selected' : ''}>+ New ${word}…</option>
       </select></label>
       <input class="input new-name" name="${name}New" placeholder="New ${word} name" autocomplete="off" enterkeyhint="done" ${sel === '__new' ? '' : 'hidden'}>
@@ -259,7 +276,7 @@
     }
     const last = lastPlace.get(product.projectId);
     const startLoc = entry ? (entry.location || '') : (project.locations || []).includes(last.location) ? last.location : null;
-    const startOwner = entry ? (entry.owner || '') : (project.owners || []).includes(last.owner) ? last.owner : null;
+    const startOwner = entry ? (entry.owner || '') : (project.owners || []).includes(last.owner) ? last.owner : soleOwner(project);
     const startFrom = entry && isOut ? sources.findIndex(b => b.location === (entry.location || '') && b.owner === (entry.owner || '')) : null;
     return new Promise((resolve) => {
       sheet(`<h3>${title}</h3>
@@ -268,7 +285,7 @@
           ${dateHtml(startDate, today)}
           ${personHtml(people, entry)}
           ${isOut ? fromHtml(sources, startFrom)
-            : pickHtml('loc', 'Storage Location', project.locations || [], startLoc, 'storage location') + pickHtml('own', 'Product Owner', project.owners || [], startOwner, 'product owner')}
+            : locPick(project, startLoc) + ownPick(project, startOwner)}
           ${qtyHtml(`Quantity ${isOut ? 'removed' : 'added'}`, startQty)}
           <div class="preview" aria-live="polite"></div>
           ${noteHtml(entry?.note, isOut ? 'e.g. 10 for sections 15A' : 'e.g. delivery from supplier, PO 5521')}
@@ -368,8 +385,8 @@
           ${fromHtml(sources, startFrom)}
           <div class="to-group">
             <div class="to-lbl">Move to</div>
-            ${pickHtml('loc', 'Storage Location', project.locations || [], entry ? (entry.toLocation || '') : null, 'storage location')}
-            ${pickHtml('own', 'Product Owner', project.owners || [], entry ? (entry.toOwner || '') : null, 'product owner')}
+            ${locPick(project, entry ? (entry.toLocation || '') : null)}
+            ${ownPick(project, entry ? (entry.toOwner || '') : null)}
           </div>
           ${qtyHtml('Quantity moved', entry ? entry.qty : 1)}
           <div class="preview" aria-live="polite"></div>
@@ -441,8 +458,8 @@
         <p class="desc" style="margin-top:-8px">${esc(productName(product))}. Enter what is actually there for one storage location and product owner.</p>
         <form class="move-form">
           ${personHtml(people)}
-          ${pickHtml('loc', 'Storage Location', project.locations || [], one ? one.location : hasUnsetLoc && !(project.locations || []).length ? '' : null, 'storage location')}
-          ${pickHtml('own', 'Product Owner', project.owners || [], one ? one.owner : hasUnsetOwn && !(project.owners || []).length ? '' : null, 'product owner')}
+          ${locPick(project, one ? one.location : hasUnsetLoc && !NAMES.locations.length ? '' : null)}
+          ${ownPick(project, one ? one.owner : hasUnsetOwn && !NAMES.owners.length ? '' : soleOwner(project))}
           ${qtyHtml('Actual count here', one ? one.qty : 0, 0)}
           <div class="preview" aria-live="polite"></div>
           <div class="actions">
@@ -587,8 +604,8 @@
       <button class="fab" id="newProj">${ICON.plus}New project</button>
     </div>`);
     frag.getElementById('newProj').onclick = async () => {
-      const name = await textSheet('New project', { placeholder: 'Project name', label: 'Create' });
-      if (name) { const p = await DB.saveProject({ name }); go(`#/p/${p.id}`); }
+      const r = await projectSheet({ title: 'New project', name: '', okLabel: 'Create' });
+      if (r) { const p = await DB.saveProject({ name: r.name, owners: r.owners }); go(`#/p/${p.id}`); }
     };
     wireBackupBanner(frag);
     return frag;
@@ -602,7 +619,11 @@
       title: project.name, back: '#/',
       menu: () => menuSheet(project.name, [
         { label: 'Reports', run: () => { repState.proj = id; repState.prod = ALL; saveRep(); go('#/reports', true); } },
-        { label: 'Storage locations and product owners', run: () => go(`#/p/${id}/places`) },
+        { label: 'Product owners for this project', run: async () => {
+          const r = await projectSheet({ title: 'Product owners for this project', chosen: project.owners || [] });
+          if (r) { await DB.setProjectNames(id, 'owners', r.owners); toast('Product owners saved'); render(); }
+        } },
+        { label: 'Storage locations and product owners', run: () => { slideDir = 1; go(listHash(lastList.get() === 'team' ? 'locations' : lastList.get()), true); } },
         { label: 'Export to spreadsheet (CSV)', run: () => exportSheet(id) },
         { label: 'Rename project', run: async () => {
           const name = await textSheet('Rename project', { value: project.name });
@@ -667,7 +688,7 @@
     let photo = existing?.photo;        // Blob | null | undefined
     const last = lastPlace.get(projectId);
     const startLoc = (project.locations || []).includes(last.location) ? last.location : null;
-    const startOwner = (project.owners || []).includes(last.owner) ? last.owner : null;
+    const startOwner = (project.owners || []).includes(last.owner) ? last.owner : soleOwner(project);
     const frag = h(`<form autocomplete="off">
       <label class="photo-pick" id="pick">
         <div>${ICON.camera}<div>Tap to take a photo</div></div>
@@ -692,8 +713,8 @@
         </div></label>
         <div id="startPlace" hidden>
           ${personHtml(people)}
-          ${pickHtml('loc', 'Storage Location', project.locations || [], startLoc, 'storage location')}
-          ${pickHtml('own', 'Product Owner', project.owners || [], startOwner, 'product owner')}
+          ${locPick(project, startLoc)}
+          ${ownPick(project, startOwner)}
         </div>`}
       <label class="field"><span>Low-stock warning (optional)</span>
         <input class="input" name="lowStockAt" type="number" inputmode="numeric" min="0" step="1" value="${existing?.lowStockAt ?? ''}" placeholder="Off">
@@ -1039,40 +1060,291 @@
     return frag;
   }
 
-  // ---------- locations & owners manager ----------
-  async function viewPlaces(id) {
-    const project = await DB.getProject(id);
-    if (!project) return notFound();
-    setChrome({ title: 'Storage locations and product owners', back: `#/p/${id}` });
-    const section = (kind, title, word, ex) => {
-      const list = project[kind] || [];
-      return `<h2 class="section">${title}</h2>
-        ${list.length ? `<div class="card namelist">${list.map((n, i) => `
-          <div class="name-row"><span class="grow">${esc(n)}</span>
-            <button class="link-btn" data-k="${kind}" data-i="${i}" data-a="ren">Rename</button>
-            <button class="link-btn danger" data-k="${kind}" data-i="${i}" data-a="rm">Remove</button></div>`).join('')}</div>`
-        : `<div class="card banner">No ${word}s yet. Add one here, or type one in when you add stock.</div>`}
-        <button class="btn wide" data-k="${kind}" data-a="add" data-w="${word}" data-ex="${esc(ex)}">+ Add ${word}</button>`;
-    };
+  // ---------- Lists tab (1.10) ----------
+  // Storage Locations, Product Owners and Team Members, one app-wide list of each, on
+  // three swipeable sub-tabs. A storage location or product owner opens its own page:
+  // what's stored there (or owned) in every project, and for locations, named photos.
+  const LIST_TABS = [['locations', 'Storage<br>Locations'], ['owners', 'Product<br>Owners'], ['team', 'Team<br>Members']];
+  const LIST_KEYS = LIST_TABS.map(t => t[0]);
+  const LIST_WORD = { locations: 'storage location', owners: 'product owner' };
+  const listHash = (kind, name) => `#/lists/${kind}${name != null ? `/${encodeURIComponent(name)}` : ''}`;
+  const lastList = { get: () => LIST_KEYS.includes(ss.get('listTab')) ? ss.get('listTab') : 'locations', set: (v) => ss.set('listTab', v) };
+  const PIN = '<svg viewBox="0 0 24 24" width="24" height="24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"><path d="M12 21s-7-6.2-7-11.5a7 7 0 0 1 14 0C19 14.8 12 21 12 21z"/><circle cx="12" cy="9.5" r="2.5"/></svg>';
+  const initial = (n) => esc((n.trim()[0] || '?').toUpperCase());
+
+  function listTabsHtml(cur) {
+    return `<nav class="seg" aria-label="Lists">${LIST_TABS.map(([k, t]) =>
+      `<a href="${listHash(k)}" data-sub="${k}" class="${k === cur ? 'on' : ''}" ${k === cur ? 'aria-current="page"' : ''}>${t}</a>`).join('')}</nav>`;
+  }
+
+  /** How each name is used: projects that use it and units stored there right now. */
+  async function nameUsage(kind) {
+    const { rows, projects } = await DB.stockRows();
+    const key = kind === 'locations' ? 'location' : 'owner';
+    const use = {};
+    const u = (n) => use[n] || (use[n] = { projects: new Set(), units: 0 });
+    for (const p of projects) for (const n of p[kind] || []) u(n).projects.add(p.id);
+    for (const r of rows) if (r[key]) { u(r[key]).units += r.qty; u(r[key]).projects.add(r.project.id); }
+    return use;
+  }
+  const usageLine = (kind, x) => {
+    if (!x || (!x.projects.size && !x.units)) return 'Not used in a project yet';
+    const bits = [`Used in ${plural(x.projects.size, 'project')}`];
+    if (x.units) bits.push(kind === 'locations' ? `${plural(x.units, 'unit')} here` : `owns ${plural(x.units, 'unit')}`);
+    return bits.join(' · ');
+  };
+
+  async function viewLists(sub) {
+    if (!LIST_KEYS.includes(sub)) sub = lastList.get();
+    lastList.set(sub);
+    setChrome({ title: 'Lists' });
+    let body;
+    if (sub === 'team') body = await teamHtml();
+    else body = await namesHtml(sub);
+    const frag = h(`<div class="lists">${listTabsHtml(sub)}<div class="sub-body"></div></div>`);
+    frag.querySelector('.sub-body').append(body);
+    frag.querySelectorAll('.seg a').forEach(a => a.onclick = (e) => {
+      e.preventDefault();
+      const to = a.dataset.sub;
+      if (to === sub) return;
+      slideDir = Math.sign(LIST_KEYS.indexOf(to) - LIST_KEYS.indexOf(sub));
+      go(listHash(to), true);
+    });
+    return frag;
+  }
+
+  async function namesHtml(kind) {
+    const word = LIST_WORD[kind];
+    const [use, photos] = await Promise.all([nameUsage(kind), kind === 'locations' ? DB.listLocPhotos() : {}]);
+    const names = NAMES[kind];
     const frag = h(`<div>
-      <p class="desc">Stock is counted separately for each storage location and product owner. These lists are only for ${esc(project.name)}.</p>
-      ${section('locations', 'Storage Locations', 'storage location', 'e.g. Bin A, Truck, Site trailer')}
-      ${section('owners', 'Product Owners', 'product owner', 'Who owns the material')}
+      <p class="desc">${kind === 'locations'
+        ? 'Where stock is kept, for example Bin A, Truck or Site trailer. Every project uses this one list. Tap one to add photos and see what is stored there.'
+        : 'Who owns the material, for example your company, the client or the general contractor. Every project uses this one list. Tap one to see what they own.'}</p>
+      ${names.length ? `<div class="list">${names.map(n => {
+        const ph = photos[n] || [];
+        const icon = kind === 'locations'
+          ? (ph.length ? `<img class="thumb sm" alt="" src="${blobUrl(ph[0].photo)}">` : `<div class="thumb sm">${PIN}</div>`)
+          : `<div class="proj-icon">${initial(n)}</div>`;
+        return `<a class="card row" href="${listHash(kind, n)}">${icon}
+          <div class="grow"><div class="t">${esc(n)}</div><div class="s">${esc(usageLine(kind, use[n]))}${ph.length ? ` · ${plural(ph.length, 'photo')}` : ''}</div></div>${ICON.chev}</a>`;
+      }).join('')}</div>`
+      : `<div class="card banner">No ${word}s yet. Add one here, or choose <b>+ New ${word}…</b> when you add stock.</div>`}
+      <button class="btn wide" data-a="add">+ Add ${word}</button>
+    </div>`);
+    frag.querySelector('[data-a=add]').onclick = async () => {
+      const v = await textSheet(`New ${word}`, { placeholder: kind === 'locations' ? 'e.g. Bin A, Truck, Site trailer' : 'e.g. Our company, Client, GC', label: 'Add' });
+      if (v) { await DB.addName(kind, v); toast(`Added ${v}`); render(); }
+    };
+    return frag;
+  }
+
+  async function teamHtml() {
+    const people = await DB.listPeople();
+    const frag = h(`<div>
+      <p class="desc">Names to pick under <b>Team Member</b> when you add, remove, move or count stock. Reports show how much each team member added and used. Every project uses this one list.</p>
+      ${people.length ? `<div class="card namelist">${people.map((n, i) => `
+        <div class="name-row"><span class="grow">${esc(n)}</span>
+          <button class="link-btn" data-i="${i}" data-a="ren">Rename</button>
+          <button class="link-btn danger" data-i="${i}" data-a="rm">Remove</button></div>`).join('')}</div>`
+      : `<div class="card banner">No names yet. Add one here, or choose <b>+ New team member…</b> on the Add or Remove form.</div>`}
+      <button class="btn wide" data-a="add">+ Add team member</button>
     </div>`);
     frag.querySelectorAll('[data-a]').forEach(b => b.onclick = async () => {
-      const kind = b.dataset.k, name = (project[kind] || [])[+b.dataset.i];
-      const word = kind === 'locations' ? 'storage location' : 'product owner';
+      const name = people[+b.dataset.i];
       if (b.dataset.a === 'add') {
-        const v = await textSheet(`New ${word}`, { placeholder: b.dataset.ex, label: 'Add' });
-        if (v) { await DB.addName(id, kind, v); render(); }
+        const v = await textSheet('New team member', { placeholder: 'Name, e.g. Sam R.', label: 'Add' });
+        if (v) { await DB.addPerson(v); render(); }
       } else if (b.dataset.a === 'ren') {
-        const v = await textSheet(`Rename ${word}`, { value: name });
-        if (v && v !== name) { await DB.renameName(id, kind, name, v); toast('Renamed everywhere in this project'); render(); }
-      } else if (await confirmSheet(`Remove “${name}”?`, `It won't be offered for new entries. Stock and History already recorded with it stay as they are.`, 'Remove')) {
-        await DB.removeName(id, kind, name); render();
+        const v = await textSheet('Rename team member', { value: name });
+        if (v && v !== name) {
+          await DB.renamePerson(name, v);
+          if (lastPerson.get() === name) lastPerson.set(v);
+          toast('Renamed on every entry'); render();
+        }
+      } else if (await confirmSheet(`Remove “${name}”?`, `They won't be offered for new entries. History already recorded with their name stays as it is.`, 'Remove')) {
+        await DB.removePerson(name); render();
       }
     });
     return frag;
+  }
+
+  /** A storage location's or product owner's page. */
+  async function viewListItem(kind, name) {
+    const word = LIST_WORD[kind];
+    const isLoc = kind === 'locations';
+    const [{ rows }, allPhotos, projects] = await Promise.all([DB.stockRows(), isLoc ? DB.listLocPhotos() : {}, DB.listProjects()]);
+    const photos = allPhotos[name] || [];
+    const key = isLoc ? 'location' : 'owner', other = isLoc ? 'owner' : 'location';
+    const here = rows.filter(r => r[key] === name);
+    const usedIn = projects.filter(p => (p[kind] || []).includes(name) || here.some(r => r.project.id === p.id));
+    const onList = NAMES[kind].includes(name);
+    setChrome({
+      title: name, back: listHash(kind),
+      menu: () => menuSheet(name, [
+        { label: `Rename ${word}`, run: async () => {
+          const v = await textSheet(`Rename ${word}`, { value: name });
+          if (!v || v === name) return;
+          await DB.renameName(kind, name, v);
+          for (const p of projects) {
+            const lp = lastPlace.get(p.id);
+            if (lp[key] === name) lastPlace.set(p.id, { ...lp, [key]: v });
+          }
+          toast('Renamed in every project and in History');
+          go(listHash(kind, v), true);
+        } },
+        { label: `Remove ${word}`, danger: true, run: async () => {
+          if (!await confirmSheet(`Remove “${name}”?`, `It won't be offered for new entries in any project.${photos.length ? ` Its ${plural(photos.length, 'photo')} will be deleted.` : ''} Stock and History already recorded with it stay as they are.`, 'Remove')) return;
+          await DB.removeName(kind, name);
+          toast(`Removed ${name}`);
+          goBack(listHash(kind));
+        } },
+      ]),
+    });
+    // stock here, grouped by project
+    const byProj = new Map();
+    for (const r of here) { if (!byProj.has(r.project.id)) byProj.set(r.project.id, { project: r.project, rows: [] }); byProj.get(r.project.id).rows.push(r); }
+    const groups = [...byProj.values()].sort((a, b) => nameSort(a.project.name, b.project.name));
+    for (const g of groups) g.rows.sort((a, b) => nameSort(productName(a.product), productName(b.product)) || nameSort(a[other], b[other]));
+    const units = here.reduce((a, r) => a + r.qty, 0);
+    const frag = h(`<div>
+      ${onList ? '' : `<div class="card banner">“${esc(name)}” is not on the ${word} list any more. Stock recorded with it is shown below.</div>`}
+      <div class="card stat-row"><div><b>${units}</b><span>${isLoc ? 'units stored here' : 'units owned'}</span></div>
+        <div><b>${new Set(here.map(r => r.product.id)).size}</b><span>products</span></div>
+        <div><b>${usedIn.length}</b><span>${usedIn.length === 1 ? 'project' : 'projects'}</span></div></div>
+      ${isLoc ? `<h2 class="section">Photos</h2>
+        ${photos.length ? `<div class="photo-grid">${photos.map((p, i) => `
+          <button class="photo-tile" data-i="${i}"><img alt="" src="${blobUrl(p.photo)}"><span>${esc(p.label || 'Photo')}</span></button>`).join('')}</div>`
+        : `<p class="desc">No photos yet. Add photos of the door, the shelves, the area, or anything that helps someone find it.</p>`}
+        <button class="btn wide" data-a="photo">+ Add photo</button>
+        <input type="file" accept="image/*" capture="environment" id="camInput" hidden>
+        <input type="file" accept="image/*" id="libInput" hidden>` : ''}
+      <h2 class="section">${isLoc ? 'Stored here' : 'Owned stock'}</h2>
+      ${groups.length ? groups.map(g => `
+        <div class="sub-head">${esc(g.project.name)}</div>
+        <div class="list">${g.rows.map(r => `
+          <a class="card row" href="#/i/${r.product.id}">
+            ${r.product.photo ? `<img class="thumb" alt="" src="${blobUrl(r.product.photo)}">` : `<div class="thumb">${ICON.box}</div>`}
+            <div class="grow"><div class="t">${esc(r.product.partNumber || '—')}</div><div class="s">${esc(r.product.description)}</div>
+              <div class="s">${isLoc ? 'Product Owner' : 'Storage Location'}: ${nameHtml(r[other])}</div></div>
+            <div class="count"><span class="n">${r.qty}</span><span class="l">${isLoc ? 'here' : 'owned'}</span></div>
+          </a>`).join('')}</div>`).join('')
+      : `<div class="card banner">Nothing in stock ${isLoc ? 'here' : `for ${esc(name)}`} right now.</div>`}
+      ${usedIn.length ? `<p class="desc used-in">Used in: ${usedIn.map(p => `<a href="#/p/${p.id}">${esc(p.name)}</a>`).join(', ')}</p>` : ''}
+    </div>`);
+    if (isLoc) {
+      const cam = frag.getElementById('camInput'), lib = frag.getElementById('libInput');
+      const onFile = async (input) => {
+        const f = input.files?.[0];
+        input.value = '';
+        if (!f) return;
+        let blob;
+        try { blob = await shrinkPhoto(f); } catch { toast('Could not read that photo'); return; }
+        const label = await textSheet('Name this photo', { placeholder: 'e.g. Door, Shelves, Area', label: 'Save photo' });
+        if (label == null) return;      // cancelled: photo not saved
+        await DB.addLocPhoto(name, label || `Photo ${photos.length + 1}`, blob);
+        toast('Photo saved'); render();
+      };
+      cam.onchange = () => onFile(cam);
+      lib.onchange = () => onFile(lib);
+      frag.querySelector('[data-a=photo]').onclick = () => menuSheet('Add photo', [
+        { label: 'Take photo', run: () => cam.click() },
+        { label: 'Choose from library', run: () => lib.click() },
+      ]);
+      frag.querySelectorAll('.photo-tile').forEach(t => t.onclick = () => photoViewer(photos, +t.dataset.i, {
+        rename: async (p) => {
+          const v = await textSheet('Rename photo', { value: p.label });
+          if (v != null && v !== p.label) { await DB.renameLocPhoto(name, p.id, v || p.label); render(); }
+        },
+        remove: async (p) => {
+          if (await confirmSheet(`Delete photo “${p.label}”?`, 'The photo will be deleted from this phone.', 'Delete')) { await DB.removeLocPhoto(name, p.id); render(); }
+        },
+      }));
+    }
+    return frag;
+  }
+
+  /** Full-screen photos: swipe or tap the arrows to go through them. */
+  function photoViewer(photos, start, { rename, remove }) {
+    hideToast();
+    let i = start;
+    const node = h(`<div class="viewer" role="dialog" aria-modal="true" aria-label="Photo">
+      <div class="viewer-top"><span class="viewer-label"></span><button class="icon-btn" data-a="close" aria-label="Close">✕</button></div>
+      <div class="viewer-img"><img alt=""></div>
+      <button class="viewer-nav prev" aria-label="Previous photo">‹</button><button class="viewer-nav next" aria-label="Next photo">›</button>
+      <div class="viewer-bar"><span class="viewer-n"></span>
+        <button class="link-btn" data-a="ren">Rename</button><button class="link-btn danger" data-a="rm">Delete</button></div>
+    </div>`);
+    const el = node.firstElementChild;
+    const src = photos.map(p => URL.createObjectURL(p.photo));
+    const img = el.querySelector('img');
+    const draw = () => {
+      img.src = src[i];
+      el.querySelector('.viewer-label').textContent = photos[i].label || 'Photo';
+      el.querySelector('.viewer-n').textContent = `${i + 1} of ${photos.length}`;
+      el.querySelector('.prev').hidden = i === 0;
+      el.querySelector('.next').hidden = i === photos.length - 1;
+    };
+    const close = () => { el.remove(); src.forEach(u => URL.revokeObjectURL(u)); };
+    const step = (d) => { const n = i + d; if (n >= 0 && n < photos.length) { i = n; draw(); } };
+    el.querySelector('.prev').onclick = () => step(-1);
+    el.querySelector('.next').onclick = () => step(1);
+    el.querySelector('[data-a=close]').onclick = close;
+    el.querySelector('[data-a=ren]').onclick = () => { const p = photos[i]; close(); rename(p); };
+    el.querySelector('[data-a=rm]').onclick = () => { const p = photos[i]; close(); remove(p); };
+    let sx = null;
+    el.addEventListener('touchstart', (e) => { sx = e.touches.length === 1 ? e.touches[0].clientX : null; }, { passive: true });
+    el.addEventListener('touchend', (e) => {
+      if (sx == null) return;
+      const dx = e.changedTouches[0].clientX - sx; sx = null;
+      if (Math.abs(dx) > 50) step(dx < 0 ? 1 : -1);
+    }, { passive: true });
+    $sheetRoot.replaceChildren(el);
+    draw();
+  }
+
+  /** New project (name + optional product owners), or the owners of an existing one.
+   *  Resolves with { name, owners } or null. */
+  function projectSheet({ title, name = null, chosen = [], okLabel = 'Save' }) {
+    return new Promise((resolve) => {
+      const picked = new Set(chosen);
+      const all = [...new Set([...NAMES.owners, ...chosen])].sort(nameSort);
+      sheet(`<h3>${esc(title)}</h3><form autocomplete="off">
+        ${name != null ? `<label class="field"><span>Project name</span><input class="input" name="name" value="${esc(name)}" placeholder="e.g. Main St. renovation" enterkeyhint="next"></label>` : ''}
+        <div class="field"><span>Product owners${name != null ? ' (optional)' : ''}</span>
+          <small class="hint" style="margin:0 0 8px">Who owns the material on this project. Tap to pick. They show first when you add stock here, and if there's only one, it's filled in for you.</small>
+          <div class="chips owner-chips"></div>
+          <div class="add-inline"><input class="input" name="newOwner" placeholder="New product owner" enterkeyhint="done">
+            <button type="button" class="btn" data-a="addOwner">Add</button></div>
+        </div>
+        <div class="actions"><button type="button" class="btn" data-a="no">Cancel</button><button class="btn primary">${esc(okLabel)}</button></div></form>`,
+        (el, close) => {
+          const f = el.querySelector('form'), box = el.querySelector('.owner-chips');
+          const draw = () => {
+            box.innerHTML = all.length ? all.map(n => `<button type="button" class="chip ${picked.has(n) ? 'on' : ''}" aria-pressed="${picked.has(n)}">${picked.has(n) ? '✓ ' : ''}${esc(n)}</button>`).join('')
+              : `<span class="chips-lbl">No product owners yet. Type one below.</span>`;
+            box.querySelectorAll('.chip').forEach((c, i) => c.onclick = () => { const n = all[i]; picked.has(n) ? picked.delete(n) : picked.add(n); draw(); });
+          };
+          const addOwner = () => {
+            const v = f.elements.newOwner.value.trim();
+            if (!v) return;
+            if (!all.includes(v)) { all.push(v); all.sort(nameSort); }
+            picked.add(v); f.elements.newOwner.value = ''; draw();
+          };
+          draw();
+          if (f.elements.name) setTimeout(() => f.elements.name.focus(), 50);
+          el.querySelector('[data-a=addOwner]').onclick = addOwner;
+          f.elements.newOwner.onkeydown = (e) => { if (e.key === 'Enter') { e.preventDefault(); addOwner(); } };
+          el.querySelector('[data-a=no]').onclick = () => { close(); resolve(null); };
+          f.onsubmit = (e) => {
+            e.preventDefault();
+            if (f.elements.newOwner.value.trim()) addOwner();
+            const nm = f.elements.name ? f.elements.name.value.trim() : null;
+            if (f.elements.name && !nm) { toast('Type a project name'); f.elements.name.focus(); return; }
+            close(); resolve({ name: nm, owners: all.filter(n => picked.has(n)) });
+          };
+        });
+    });
   }
 
   // ---------- backup, restore & export ----------
@@ -1098,7 +1370,7 @@
   const fmtSize = (n) => n < 1024 * 1024 ? `${Math.max(1, Math.round(n / 1024))} KB` : `${(n / 1024 / 1024).toFixed(1)} MB`;
   const countsOf = (d) => ({
     projects: d.projects.length, products: d.products.length, entries: d.movements.length,
-    photos: d.products.filter(p => p.photo).length,
+    photos: d.products.filter(p => p.photo).length + Object.values(d.locPhotos || {}).reduce((a, l) => a + l.length, 0),
   });
   const countsText = (c) => `${plural(c.projects, 'project')}, ${plural(c.products, 'product')}, ${c.entries} History ${c.entries === 1 ? 'entry' : 'entries'} and ${plural(c.photos, 'photo')}`;
   /** "3 days ago" style, for the last backup. */
@@ -1126,10 +1398,18 @@
     const data = await DB.exportAll();
     const products = [];
     for (const p of data.products) products.push({ ...p, photo: p.photo ? await blobToDataUrl(p.photo) : null });
+    const locPhotos = {};
+    for (const [n, list] of Object.entries(data.locPhotos || {})) {
+      locPhotos[n] = [];
+      for (const x of list) locPhotos[n].push({ ...x, photo: await blobToDataUrl(x.photo) });
+    }
     const createdAt = new Date().toISOString();
     const out = {
       app: BACKUP_APP, format: BACKUP_FORMAT, version: APP_VERSION, build: APP_BUILD, createdAt,
-      counts: countsOf(data), data: { projects: data.projects, products, movements: data.movements, people: data.people },
+      counts: countsOf(data), data: {
+        projects: data.projects, products, movements: data.movements, people: data.people,
+        locations: data.locations, owners: data.owners, locPhotos,
+      },
     };
     const file = new File([JSON.stringify(out)], `inventory-backup-${toDateInput()}.json`, { type: 'application/json' });
     return { file, counts: out.counts };
@@ -1197,7 +1477,7 @@
     try { obj = JSON.parse(await file.text()); } catch { throw new Error("This isn't a Simple Inventory backup file."); }
     if (!obj || obj.app !== BACKUP_APP || !obj.data) throw new Error("This isn't a Simple Inventory backup file.");
     if (obj.format > BACKUP_FORMAT || obj.build > APP_BUILD) throw new Error(`This backup was made by a newer version (${obj.version} build ${obj.build}). Update the app first: close it fully and open it again.`);
-    const { projects, products, movements, people } = obj.data;
+    const { projects, products, movements, people, locations, owners, locPhotos } = obj.data;
     const ok = Array.isArray(projects) && Array.isArray(products) && Array.isArray(movements)
       && projects.every(p => p && p.id && typeof p.name === 'string')
       && products.every(p => p && p.id && p.projectId)
@@ -1209,6 +1489,18 @@
       movements,
     };
     if (Array.isArray(people)) data.people = people.filter(n => typeof n === 'string');
+    // 1.10: app-wide storage locations and product owners, and location photos
+    if (Array.isArray(locations)) data.locations = locations.filter(n => typeof n === 'string');
+    if (Array.isArray(owners)) data.owners = owners.filter(n => typeof n === 'string');
+    if (locPhotos && typeof locPhotos === 'object') {
+      data.locPhotos = {};
+      for (const [n, list] of Object.entries(locPhotos)) {
+        const ok = (Array.isArray(list) ? list : []).filter(x => x && typeof x.photo === 'string')
+          .map(x => ({ id: x.id || String(Math.random()).slice(2), label: String(x.label || 'Photo'), at: x.at, photo: dataUrlToBlob(x.photo) }))
+          .filter(x => x.photo);
+        if (ok.length) data.locPhotos[n] = ok;
+      }
+    }
     return { createdAt: obj.createdAt, version: obj.version, build: obj.build, data, counts: countsOf(data) };
   }
 
@@ -1272,7 +1564,7 @@
     const projects = await DB.listProjects();
     if (!projects.length) return h(`<div class="empty">${ICON.box}<b>No projects</b>There is nothing to delete.</div>`);
     const frag = h(`<div class="del-page">
-      <p class="desc">Tick the projects to delete. Their products, photos, storage locations, product owners and History go with them.</p>
+      <p class="desc">Tick the projects to delete. Their products, photos and History go with them. Storage locations, product owners and team members stay on the Lists tab.</p>
       <div class="sel-bar"><span data-a="count">None selected</span><button type="button" class="link-btn" data-a="all">Select all</button></div>
       <div class="list">${projects.map(p => `
         <label class="card row check-row">
@@ -1309,7 +1601,7 @@
     const groups = await Promise.all(projects.map(async p => ({ p,
       items: (await DB.listProducts(p.id)).sort((a, b) => nat(a.partNumber, b.partNumber) || nat(a.description, b.description)) })));
     const frag = h(`<div>
-      <p class="desc">Tick the products to delete. Their photos and History go with them. The projects, storage locations and product owners stay.</p>
+      <p class="desc">Tick the products to delete. Their photos and History go with them. The projects and the Lists stay.</p>
       <div class="sel-bar"><span data-a="count">None selected</span></div>
       ${groups.map(({ p, items }) => `<div class="del-group" data-p="${esc(p.id)}">
         <div class="sel-bar group-head"><h2 class="section">${esc(p.name)}</h2><button type="button" class="link-btn" data-a="grp">Select all</button></div>
@@ -1539,38 +1831,6 @@
           });
         };
       });
-  }
-
-  // ---------- people (1.6) ----------
-  async function viewPeople() {
-    setChrome({ title: 'Team Members', back: '#/settings' });
-    const people = await DB.listPeople();
-    const frag = h(`<div>
-      <p class="desc">Names to pick under <b>Team Member</b> when you add, remove, move or count stock. Reports show how much each team member added and used. This list is for the whole app, not one project.</p>
-      ${people.length ? `<div class="card namelist">${people.map((n, i) => `
-        <div class="name-row"><span class="grow">${esc(n)}</span>
-          <button class="link-btn" data-i="${i}" data-a="ren">Rename</button>
-          <button class="link-btn danger" data-i="${i}" data-a="rm">Remove</button></div>`).join('')}</div>`
-      : `<div class="card banner">No names yet. Add one here, or choose <b>+ New team member…</b> on the Add or Remove form.</div>`}
-      <button class="btn wide" data-a="add">+ Add team member</button>
-    </div>`);
-    frag.querySelectorAll('[data-a]').forEach(b => b.onclick = async () => {
-      const name = people[+b.dataset.i];
-      if (b.dataset.a === 'add') {
-        const v = await textSheet('New team member', { placeholder: 'Name, e.g. Sam R.', label: 'Add' });
-        if (v) { await DB.addPerson(v); render(); }
-      } else if (b.dataset.a === 'ren') {
-        const v = await textSheet('Rename team member', { value: name });
-        if (v && v !== name) {
-          await DB.renamePerson(name, v);
-          if (lastPerson.get() === name) lastPerson.set(v);
-          toast('Renamed on every entry'); render();
-        }
-      } else if (await confirmSheet(`Remove “${name}”?`, `They won't be offered for new entries. History already recorded with their name stays as it is.`, 'Remove')) {
-        await DB.removePerson(name); render();
-      }
-    });
-    return frag;
   }
 
   // ---------- reports (1.6) ----------
@@ -1917,14 +2177,8 @@
     setChrome({ title: 'Settings' });
     const last = backupPrefs.last();
     const safe = await DB.beforeRestore().catch(() => null);
-    const people = await DB.listPeople().catch(() => []);
     const frag = h(`<div>
-      <h2 class="section">Team Members</h2>
-      <div class="list">
-        <a class="card row" href="#/settings/people">
-          <div class="grow"><div class="t">Team Member list</div><div class="s">${people.length ? `${esc(people.slice(0, 3).join(', '))}${people.length > 3 ? ` and ${people.length - 3} more` : ''}` : 'Names to pick under Team Member on Add, Remove and Move'}</div></div>${ICON.chev}
-        </a>
-      </div>
+      <p class="desc">Storage locations, product owners and team members are on the <b>Lists</b> tab.</p>
       <h2 class="section">Backup and export</h2>
       <div class="list">
         <button class="card row" data-a="backup">
@@ -1953,7 +2207,7 @@
           <div class="grow"><div class="t danger-txt">Delete projects</div><div class="s">Pick one or more projects to delete, with their products, photos and History</div></div>${ICON.chev}
         </a>
         <button class="card row" data-a="wipe">
-          <div class="grow"><div class="t danger-txt">Delete all data</div><div class="s">Erase every project, product, photo and History entry on this phone</div></div>${ICON.chev}
+          <div class="grow"><div class="t danger-txt">Delete all data</div><div class="s">Erase every project, product, photo, storage location, product owner and History entry on this phone</div></div>${ICON.chev}
         </button>
       </div>
       <h2 class="section">Updates</h2>
@@ -2011,8 +2265,10 @@
       ['Adding a product', 'Open a project and tap <b>Add product</b>. Tap the photo box to take a picture, enter the model/part number and a description, set the starting quantity, then tap <b>Add product</b>.'],
       ['Photos', 'Tap the photo box to use the camera, or <b>Choose from library</b> for a saved picture. To change a photo later, open the product, tap <b>⋮</b> › <b>Edit product</b>.'],
       ['Adding and removing stock', 'Tap a product to open it, then tap <b>+ Add</b> or <b>− Remove</b>. Pick the date (today is filled in), enter the quantity and, if you like, a note such as "10 for sections 15A". Add asks for the storage location and product owner. Remove asks where the stock comes from and won\'t let you take more than that spot holds. The form shows the stock there and the total after the change. Notes you used recently appear under the note box: tap one to reuse it. Right after saving, tap <b>Undo</b> at the bottom if it was a mistake.'],
-      ['Storage locations and product owners', 'Stock is counted separately for each storage location (for example Bin A, Truck) and product owner. The product page shows the total and how much is at each one. In the Add form, pick a storage location and product owner, or choose <b>+ New storage location…</b> / <b>+ New product owner…</b> to type a new one. To rename or remove names, open the project and tap <b>⋮</b> › <b>Storage locations and product owners</b>. Renaming updates every entry in the project.'],
-      ['Team members', 'Add, Remove, Move and Correct stock count ask which <b>Team Member</b> is doing it. Pick a name, or choose <b>+ New team member…</b> to type one. The last name you picked is filled in next time. To rename or remove names, tap <b>Settings</b> (bottom of the screen) › <b>Team Member list</b>. Renaming changes the name on every entry. Entries from before version 1.6 show Team Member as <b>Not set</b>; tap one in History and <b>Edit</b> it to fill it in.'],
+      ['Storage locations and product owners', 'Stock is counted separately for each storage location (for example Bin A, Truck) and product owner. The product page shows the total and how much is at each one. In the Add form, pick a storage location and product owner, or choose <b>+ New storage location…</b> / <b>+ New product owner…</b> to type a new one. The names the project already uses show first, under <b>This project</b>. Every project shares one list of each: tap <b>Lists</b> (bottom of the screen). Tap a name there to see what is stored there (or owned), and to rename or remove it with <b>⋮</b>. Renaming updates every project and History.'],
+      ['Storage location photos', 'Tap <b>Lists</b> › <b>Storage Locations</b> and tap a location. Tap <b>+ Add photo</b>, take a photo or choose one from your library, then give it a name, like Door or Shelves. Add as many as you like. Tap a photo to see it full size, swipe to see the next one, and use <b>Rename</b> or <b>Delete</b> at the bottom.'],
+      ['Project product owners', 'When you create a project, tap the product owners who own the material on it (or type a new one). They show first when you add stock in that project, and if there is only one it is filled in for you. To change them, open the project and tap <b>⋮</b> › <b>Product owners for this project</b>.'],
+      ['Team members', 'Add, Remove, Move and Correct stock count ask which <b>Team Member</b> is doing it. Pick a name, or choose <b>+ New team member…</b> to type one. The last name you picked is filled in next time. To rename or remove names, tap <b>Lists</b> (bottom of the screen) › <b>Team Members</b>. Renaming changes the name on every entry. Entries from before version 1.6 show Team Member as <b>Not set</b>; tap one in History and <b>Edit</b> it to fill it in.'],
       ['Reports', 'Tap the <b>Reports</b> tab at the bottom of the screen, or open a project and tap <b>⋮</b> › <b>Reports</b>. Pick a project or All projects and the dates (This week, Last week, This month, Last month, Last 30 days, or type your own). Tap <b>Filters</b> to look at one storage location, product owner, team member or product. The report shows the totals added and used, then the same per product (with stock at the start and end, and when it was last used), per storage location, per product owner, per team member and per note, then every entry with its date, team member and note. Tap <b>Preview report</b> to see it exactly as the PDF will look, then <b>Print / save PDF</b> or <b>Close</b>. Tap <b>Print / save PDF</b> to print it or save it as a PDF (on iPhone, tap the Share button on the print screen), or <b>Share spreadsheet</b> for CSV files.'],
       ['Moving stock', 'To move stock between storage locations or product owners (for example from Bin A to the truck), open the product and tap <b>⇄ Move</b>. Pick where it comes from, where it goes, and how many. The total stays the same and History shows one "Moved" entry.'],
       ['Low-stock warning', 'When adding a product, when adding or removing stock, or with <b>⋮</b> › <b>Edit product</b>, fill in <b>Low-stock warning</b>. When the total in stock is at or below that number, the product shows a red <b>Low</b> tag, the project shows how many items are low, and <b>Low stock only</b> above the product list shows just those.'],
@@ -2072,16 +2328,18 @@
   }
 
   // ---------- tabs (1.8) ----------
-  // Four top-level tabs (1.9: Projects, Inventory, Reports, Settings). 'inv' is the
+  // Five top-level tabs (1.10: Projects, Inventory, Reports, Lists, Settings). 'inv' is the
   // Projects tab (it was called Inventory in 1.8); 'all' is the all-projects Inventory.
+  // Lists has three sub-tabs; swiping moves through them before moving to the next tab.
   // Switching tabs replaces the history entry instead of adding one, so the ‹ back
   // button inside a project still goes to the parent screen. Projects remembers the
   // project or product you had open.
-  const TABS = ['inv', 'all', 'rep', 'set'];
-  const TAB_ROOT = { inv: '#/', all: '#/inventory', rep: '#/reports', set: '#/settings' };
+  const TABS = ['inv', 'all', 'rep', 'lst', 'set'];
+  const TAB_ROOT = { inv: '#/', all: '#/inventory', rep: '#/reports', lst: '#/lists', set: '#/settings' };
   const curHash = () => location.hash || '#/';
-  const tabOf = (hash) => /^#\/inventory/.test(hash) ? 'all' : /^#\/reports/.test(hash) ? 'rep' : /^#\/settings/.test(hash) ? 'set' : 'inv';
-  const isTabRoot = (hash) => /^(#\/?)?$/.test(hash) || hash === '#/inventory' || hash === '#/reports' || hash === '#/settings';
+  const tabOf = (hash) => /^#\/inventory/.test(hash) ? 'all' : /^#\/reports/.test(hash) ? 'rep' : /^#\/lists/.test(hash) ? 'lst' : /^#\/settings/.test(hash) ? 'set' : 'inv';
+  const listSubOf = (hash) => { const m = /^#\/lists(?:\/(locations|owners|team))?$/.exec(hash); return m ? (m[1] || lastList.get()) : null; };
+  const isTabRoot = (hash) => /^(#\/?)?$/.test(hash) || hash === '#/inventory' || hash === '#/reports' || hash === '#/settings' || !!listSubOf(hash);
   // forms and the delete screens have their own bottom buttons, so no tab bar there
   const noTabs = (hash) => /^#\/(p\/[^/]+\/new|i\/[^/]+\/edit|settings\/delete)/.test(hash);
   let slideDir = 0;
@@ -2102,12 +2360,13 @@
   async function switchTab(tab) {
     const from = tabOf(curHash());
     let target = TAB_ROOT[tab];
+    if (tab === 'lst') target = listHash(lastList.get());
     if (tab === 'inv' && from !== 'inv') {
       // back to the project or product that was open, if it still exists
       const m = (ss.get('invHash') || '').match(/^#\/(p|i)\/([^/]+)$/);
       if (m && await (m[1] === 'p' ? DB.getProject(m[2]) : DB.getProduct(m[2])).catch(() => null)) target = m[0];
     }
-    if (target === curHash()) { window.scrollTo({ top: 0, behavior: 'smooth' }); return; }
+    if (target === curHash() || (tab === 'lst' && from === 'lst' && listSubOf(curHash()))) { window.scrollTo({ top: 0, behavior: 'smooth' }); return; }
     slideDir = Math.sign(TABS.indexOf(tab) - TABS.indexOf(from));
     go(target, true);
     reloadIfUpdated();
@@ -2120,7 +2379,7 @@
     switchTab(a.dataset.tab);
   });
 
-  // Swipe left/right on the three main screens to change tab. Not inside a
+  // Swipe left/right on the main screens to change tab (on Lists, sub-tab first). Not inside a
   // project (it would fire while scrolling), not from the screen edges (the
   // phone's own back gesture), and not on text boxes or while a sheet is open.
   let swipe = null;
@@ -2139,6 +2398,11 @@
     const quick = Date.now() - swipe.t < 800;
     swipe = null;
     if (!quick || Math.abs(dx) < 60 || Math.abs(dx) < 2 * Math.abs(dy)) return;
+    const sub = listSubOf(curHash());
+    if (sub) {
+      const j = LIST_KEYS.indexOf(sub) + (dx < 0 ? 1 : -1);
+      if (j >= 0 && j < LIST_KEYS.length) { slideDir = dx < 0 ? 1 : -1; go(listHash(LIST_KEYS[j]), true); return; }
+    }
     const i = TABS.indexOf(tabOf(curHash())) + (dx < 0 ? 1 : -1);
     if (i >= 0 && i < TABS.length) switchTab(TABS[i]);
   }, { passive: true });
@@ -2151,8 +2415,9 @@
     const parts = (location.hash.replace(/^#\/?/, '') || '').split('/').filter(Boolean);
     let node;
     try {
+      await refreshNames();
       if (parts[0] === 'p' && parts[2] === 'new') node = await viewProductForm(parts[1]);
-      else if (parts[0] === 'p' && parts[2] === 'places') node = await viewPlaces(parts[1]);
+      else if (parts[0] === 'p' && parts[2] === 'places') node = await viewLists('locations'); // before 1.10
       else if (parts[0] === 'p' && parts[1]) node = await viewProject(parts[1]);
       else if (parts[0] === 'i' && parts[2] === 'edit') node = await viewProductForm(null, parts[1]);
       else if (parts[0] === 'i' && parts[1]) node = await viewProduct(parts[1]);
@@ -2161,7 +2426,9 @@
       else if (parts[0] === 'inventory' && parts[1]) node = await viewInventoryItem(decodeURIComponent(parts[1]));
       else if (parts[0] === 'inventory') node = await viewInventory();
       else if (parts[0] === 'reports') node = await viewReports();
-      else if (parts[0] === 'settings' && parts[1] === 'people') node = await viewPeople();
+      else if (parts[0] === 'settings' && parts[1] === 'people') node = await viewLists('team'); // before 1.10
+      else if (parts[0] === 'lists' && LIST_WORD[parts[1]] && parts[2]) node = await viewListItem(parts[1], decodeURIComponent(parts[2]));
+      else if (parts[0] === 'lists') node = await viewLists(parts[1]);
       else if (parts[0] === 'settings' && parts[1] === 'delete-items') node = await viewDeleteItems();
       else if (parts[0] === 'settings' && parts[1] === 'delete') node = await viewDeleteProjects();
       else if (parts[0] === 'settings') node = await viewSettings();

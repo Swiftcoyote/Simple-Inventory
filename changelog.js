@@ -4,6 +4,21 @@
  * to match (e.g. '1.1-build2'). Builds count up and never reset. */
 window.CHANGELOG = [
   {
+    version: '1.10', build: 11, date: '2026-11-23',
+    title: 'New Lists tab, location photos and project owners',
+    changes: [
+      'New Lists tab at the bottom of the screen, between Reports and Settings. It has three parts across the top: Storage Locations, Product Owners and Team Members. Tap one, or swipe left and right to move between them.',
+      'Storage locations and product owners are now one list for the whole app, so every project can use them. The names your projects already had were combined into these lists. Nothing was lost.',
+      'Each project still remembers the names it uses. On the Add, Remove, Move and Count forms, those names show first under This project, and the rest of the list shows below them.',
+      'Tap a storage location to open its page. You can add as many photos as you like (camera or library) and give each one a name, like Door or Shelves. Tap a photo to see it full size and swipe through them. The page also shows everything stored there, in every project.',
+      'Tap a product owner to see all the stock they own, in every project.',
+      'Rename a storage location or product owner from its page (⋮ › Rename). The name changes in every project and in History. Remove takes it off the list. History already recorded with it stays as it is.',
+      'New project now has an optional Product owners section. Tap names to pick them, or type a new one. If a project has only one product owner, it is filled in for you when you add stock. To change them later, open the project and tap ⋮ › Product owners for this project.',
+      'Team Members moved from Settings to the Lists tab. Settings now has backup, delete, What\'s New and help.',
+      'Backups now include the storage locations, product owners and location photos.',
+    ],
+  },
+  {
     version: '1.9', build: 10, date: '2026-11-23',
     title: 'New Inventory tab and clearer names',
     changes: [
