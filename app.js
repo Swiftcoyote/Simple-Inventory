@@ -687,8 +687,8 @@
           ${lowCount ? `<button class="filter ${lowOnly ? 'on' : ''}" id="lowOnly" aria-pressed="${lowOnly}">Low stock only (${lowCount})</button>` : ''}
         </div>
         <div class="list" id="plist"></div>`
-      : `<div class="empty">${ICON.camera}<b>No products yet</b>Tap <i>Add product</i> to snap a photo and record a part.</div>`}
-      <button class="fab" id="newProd">${ICON.plus}Add product</button>
+      : `<div class="empty">${ICON.camera}<b>No products yet</b>Tap <i>Add inventory</i> to snap a photo and record a part.</div>`}
+      <button class="fab" id="newProd">${ICON.plus}Add inventory</button>
     </div>`);
 
     const list = frag.getElementById('plist');
@@ -714,19 +714,36 @@
     return frag;
   }
 
-  async function viewProductForm(projectId, productId) {
+  /** New inventory (in a project, or from the Inventory tab with `fromInv`: then the form
+   *  starts with a Project dropdown) or Edit product. */
+  async function viewProductForm(projectId, productId, fromInv = false) {
     const existing = productId ? await DB.getProduct(productId) : null;
     if (productId && !existing) return notFound();
-    projectId = projectId || existing.projectId;
-    const [project, people] = await Promise.all([DB.getProject(projectId), DB.listPeople()]);
-    if (!project) return notFound();
-    setChrome({ title: existing ? 'Edit product' : 'New product', back: existing ? `#/i/${productId}` : `#/p/${projectId}` });
+    projectId = projectId || existing?.projectId || null;
+    const [projects, people, { items }] = await Promise.all([DB.listProjects(), DB.listPeople(), inventoryItems()]);
+    projects.sort((a, b) => natCmp(a.name, b.name));
+    if (fromInv && !projectId) {
+      const remembered = ss.get('invLastProj');
+      projectId = projects.some(p => p.id === remembered) ? remembered : projects.length === 1 ? projects[0].id : null;
+    }
+    let project = projects.find(p => p.id === projectId) || null;
+    if (!fromInv && !project) return notFound();
+    if (fromInv && !projects.length) return h(`<div class="empty">${ICON.box}<b>No projects yet</b>Inventory is kept in projects. Tap <b>Projects</b> at the bottom of the screen and create one first.</div>`);
+    setChrome({ title: existing ? 'Edit product' : 'Add inventory', back: existing ? `#/i/${productId}` : fromInv ? '#/inventory' : `#/p/${projectId}` });
 
     const photos = productPhotos(existing || {});   // main photo first
-    const last = lastPlace.get(projectId);
-    const startLoc = (project.locations || []).includes(last.location) ? last.location : null;
-    const startOwner = (project.owners || []).includes(last.owner) ? last.owner : soleOwner(project);
+    const placeStart = (pr) => {
+      const last = pr ? lastPlace.get(pr.id) : {};
+      return { loc: (pr?.locations || []).includes(last.location) ? last.location : null,
+        own: (pr?.owners || []).includes(last.owner) ? last.owner : soleOwner(pr) };
+    };
+    const { loc: startLoc, own: startOwner } = placeStart(project);
     const frag = h(`<form autocomplete="off">
+      ${fromInv ? `<label class="field"><span>Project</span>
+        <select class="input" name="proj">
+          ${project ? '' : '<option value="" disabled selected>Choose project…</option>'}
+          ${projects.map(p => `<option value="${esc(p.id)}" ${p.id === projectId ? 'selected' : ''}>${esc(p.name)}</option>`).join('')}
+        </select></label>` : ''}
       <label class="photo-pick" id="pick">
         <div>${ICON.camera}<div>Tap to take a photo</div></div>
         <input type="file" accept="image/*" capture="environment" aria-label="Take photo">
@@ -740,19 +757,19 @@
       <label class="field"><span>Model / part number</span>
         <input class="input" name="partNumber" value="${esc(existing?.partNumber)}" placeholder="e.g. 3M-2097" autocapitalize="characters" spellcheck="false" enterkeyhint="next">
       </label>
+      <div class="card banner dup-note" hidden></div>
       <label class="field"><span>Description</span>
         <textarea class="input" name="description" placeholder="What is it? Size, color, where it's used…">${esc(existing?.description)}</textarea>
       </label>
-      ${existing ? '' : `<label class="field"><span>Starting quantity</span>
+      ${existing ? '' : `<label class="field"><span>Quantity</span>
         <div class="stepper">
           <button type="button" class="qbtn minus" data-s="-1">−</button>
-          <input class="input" name="initialStock" type="number" inputmode="numeric" min="0" step="1" value="0">
+          <input class="input" name="initialStock" type="number" inputmode="numeric" min="0" step="1" value="1">
           <button type="button" class="qbtn plus" data-s="1">+</button>
         </div></label>
-        <div id="startPlace" hidden>
+        <div id="startPlace">
           ${personHtml(people)}
-          ${locPick(project, startLoc)}
-          ${ownPick(project, startOwner)}
+          <div id="placePicks">${locPick(project, startLoc)}${ownPick(project, startOwner)}</div>
         </div>`}
       <label class="field"><span>Low-stock warning (optional)</span>
         <input class="input" name="lowStockAt" type="number" inputmode="numeric" min="0" step="1" value="${existing?.lowStockAt ?? ''}" placeholder="Off">
@@ -760,7 +777,7 @@
       </label>
       <div class="actions" style="margin-top:20px">
         <button type="button" class="btn" id="cancel">Cancel</button>
-        <button class="btn primary">${existing ? 'Save' : 'Add product'}</button>
+        <button class="btn primary">${existing ? 'Save' : 'Add inventory'}</button>
       </div>
     </form>`);
 
@@ -814,11 +831,59 @@
     if (startPlace) { form.elements.initialStock.oninput = syncStart; wirePicks(startPlace); }
     frag.getElementById('cancel').onclick = () => $back.click();
 
+    // Same part number already in inventory (1.12): in this project, point to it instead of
+    // making a second copy; in other projects, offer to fill in its description and photos.
+    const dup = frag.querySelector('.dup-note');
+    const pnEl = form.elements.partNumber;
+    let dupHere = null;
+    const checkDup = () => {
+      dupHere = null;
+      const pn = pnEl.value.trim();
+      const it = pn && items.find(i => i.key === `pn:${pn.toLowerCase()}`);
+      const rows = it ? it.rows.filter(r => r.product.id !== existing?.id) : [];
+      if (!rows.length) { dup.hidden = true; return; }
+      const here = projectId && rows.find(r => r.project.id === projectId);
+      dup.hidden = false;
+      if (here) {
+        dupHere = here.product;
+        dup.innerHTML = `<b>${esc(pn)} is already in ${esc(here.project.name)}</b> (${here.product.stock} in stock). Add stock to it instead, so it isn't listed twice.
+          <div class="actions"><button type="button" class="btn primary" data-a="open">Open it</button></div>`;
+        dup.querySelector('[data-a=open]').onclick = () => go(`#/i/${here.product.id}`, true);
+      } else if (!existing) {
+        const src = rows[0].product;
+        dup.innerHTML = `<b>${esc(pn)} is already in ${esc(rows.map(r => r.project.name).join(', '))}.</b> It will show once on the Inventory tab, with the total of every project.
+          ${(!form.elements.description.value.trim() && src.description) || (!photos.length && productPhotos(src).length) ? `<div class="actions"><button type="button" class="btn" data-a="fill">Use its description and photos</button></div>` : ''}`;
+        const fill = dup.querySelector('[data-a=fill]');
+        if (fill) fill.onclick = () => {
+          if (!form.elements.description.value.trim()) form.elements.description.value = src.description || '';
+          if (!photos.length) { photos.push(...productPhotos(src)); showPhoto(); }
+          if (src.lowStockAt != null && form.elements.lowStockAt.value === '') form.elements.lowStockAt.value = src.lowStockAt;
+          checkDup();
+        };
+      } else dup.hidden = true;
+    };
+    pnEl.addEventListener('input', checkDup);
+    checkDup();
+
+    if (form.elements.proj) form.elements.proj.onchange = () => {
+      projectId = form.elements.proj.value;
+      project = projects.find(p => p.id === projectId);
+      const keepWho = form.elements.who.value;
+      const st = placeStart(project);
+      const box = form.querySelector('#placePicks');
+      box.innerHTML = locPick(project, st.loc) + ownPick(project, st.own);
+      wirePicks(box);
+      form.elements.who.value = keepWho;
+      checkDup();
+    };
+
     form.onsubmit = async (e) => {
       e.preventDefault();
       const partNumber = form.elements.partNumber.value.trim();
       const description = form.elements.description.value.trim();
+      if (fromInv && !projectId) { toast('Choose the project to add it to'); form.elements.proj.focus(); return; }
       if (!partNumber && !description) { toast('Add a part number or description'); form.elements.partNumber.focus(); return; }
+      if (dupHere) { toast(`Already in ${project.name}. Tap Open it to add stock there.`); dup.scrollIntoView({ block: 'center' }); return; }
       const lowRaw = form.elements.lowStockAt.value.trim();
       const lowStockAt = lowRaw === '' ? null : parseInt(lowRaw, 10);
       if (lowRaw !== '' && (isNaN(lowStockAt) || lowStockAt < 0)) { toast('Low-stock warning must be 0 or more'); return; }
@@ -836,8 +901,9 @@
         id: existing?.id, projectId, partNumber, description, photo: photos[0] || null, morePhotos: photos.slice(1),
         initialStock, location, owner, person, lowStockAt,
       });
-      toast(existing ? 'Saved' : 'Product added');
-      goBack(existing ? `#/i/${rec.id}` : `#/p/${projectId}`);
+      if (fromInv) ss.set('invLastProj', projectId);
+      toast(existing ? 'Saved' : initialStock > 0 ? `Added ${initialStock} to ${project.name}` : `Added to ${project.name}`);
+      goBack(existing ? `#/i/${rec.id}` : fromInv ? `#/inventory/${encodeURIComponent(invKey(rec))}` : `#/p/${projectId}`);
     };
     return frag;
   }
@@ -1071,8 +1137,10 @@
           ${lowCount ? `<button class="filter ${st.low ? 'on' : ''}" id="lowOnly" aria-pressed="${st.low}">Low stock only (${lowCount})</button>` : ''}
         </div>
         <div class="list" id="ilist"></div>`
-      : `<div class="empty">${ICON.box}<b>No products yet</b>Products you add in any project show up here, all in one list.</div>`}
+      : `<div class="empty">${ICON.box}<b>No products yet</b>Tap <i>Add inventory</i> to add your first product. Products from every project show up here, all in one list.</div>`}
+      <button class="fab" id="newInv">${ICON.plus}Add inventory</button>
     </div>`);
+    frag.getElementById('newInv').onclick = () => go('#/inventory/new');
 
     const list = frag.getElementById('ilist'), sumEl = frag.getElementById('invSum');
     const draw = () => {
@@ -2449,7 +2517,7 @@
       ['Inventory (all projects)', 'The <b>Inventory</b> tab lists every product from every project, including ones with 0 in stock. Products with the same part number in different projects are shown once with the combined total. Search by part number, description or project, or tap <b>Filters and sort</b>. Tap a product to see its photos, the total in stock and <b>Where it is</b>: a card for each project with its storage locations, product owners and how many are at each. Tap <b>+ Add</b>, <b>⇄ Move</b> or <b>− Remove</b> there and pick the project first. Tap a project card to open the product in that project with its History. <b>Recent activity</b> shows the last 5 changes; tap <b>See all in Reports</b> for the rest.'],
       ['Projects', 'Each project keeps its own inventory. On the <b>Projects</b> tab tap <b>New project</b>. Open a project and tap <b>⋮</b> to rename or delete it.'],
       ['Deleting inventory, projects or all data', 'To delete products but keep their project, tap <b>Settings</b> (bottom of the screen) › <b>Delete inventory</b>, tick the products (or <b>Select all</b> under a project) and tap <b>Delete</b>. To delete whole projects, tap <b>Delete projects</b>, tick the projects you want gone and tap <b>Delete</b>. To wipe everything, tap <b>Delete all data</b> and type <b>DELETE</b> to confirm. Both offer <b>Back up first</b>. A safety copy is kept, so if it was a mistake, tap <b>Undo</b> straight away or <b>Undo last delete</b> in Settings. Only the last restore or delete can be undone.'],
-      ['Adding a product', 'Open a project and tap <b>Add product</b>. Tap the photo box to take a picture, enter the model/part number and a description, set the starting quantity, then tap <b>Add product</b>.'],
+      ['Adding inventory', 'Tap <b>Add inventory</b> on the <b>Inventory</b> tab, or open a project and tap <b>Add inventory</b> there. From the Inventory tab, pick the <b>Project</b> first. Tap the photo box to take a picture, enter the model/part number and a description, then the quantity, team member, storage location and product owner, and tap <b>Add inventory</b>. If that part number is already in the project, the form says so: tap <b>Open it</b> and use <b>+ Add</b> there instead. If it is in another project, tap <b>Use its description and photos</b> to fill them in.'],
       ['Photos', 'Tap the photo box to use the camera, or <b>Choose from library</b> for a saved picture. A product can have as many photos as you like: open the product, tap <b>⋮</b> › <b>Edit product and photos</b>, then tap <b>+ Add</b>. The <b>★ main photo</b> is the one shown in lists. Tap a photo there to make it the main photo or remove it. On the product page, swipe the photos left and right and tap one to see it full size.'],
       ['Adding and removing stock', 'Tap a product to open it, then tap <b>+ Add</b> or <b>− Remove</b>. Pick the date (today is filled in), enter the quantity and, if you like, a note such as "10 for sections 15A". Add asks for the storage location and product owner. Remove asks where the stock comes from and won\'t let you take more than that spot holds. The form shows the stock there and the total after the change. Notes you used recently appear under the note box: tap one to reuse it. Right after saving, tap <b>Undo</b> at the bottom if it was a mistake.'],
       ['Storage locations and product owners', 'Stock is counted separately for each storage location (for example Bin A, Truck) and product owner. The product page shows the total and how much is at each one. In the Add form, pick a storage location and product owner, or choose <b>+ New storage location…</b> / <b>+ New product owner…</b> to type a new one. The names the project already uses show first, under <b>This project</b>. Every project shares one list of each: tap <b>Lists</b> (bottom of the screen). Tap a name there to see what is stored there (or owned), and to rename or remove it with <b>⋮</b>. Renaming updates every project and History.'],
@@ -2528,7 +2596,7 @@
   const listSubOf = (hash) => { const m = /^#\/lists(?:\/(locations|owners|team))?$/.exec(hash); return m ? (m[1] || lastList.get()) : null; };
   const isTabRoot = (hash) => /^(#\/?)?$/.test(hash) || hash === '#/inventory' || hash === '#/reports' || hash === '#/settings' || !!listSubOf(hash);
   // forms and the delete screens have their own bottom buttons, so no tab bar there
-  const noTabs = (hash) => /^#\/(p\/[^/]+\/new|i\/[^/]+\/edit|settings\/delete)/.test(hash);
+  const noTabs = (hash) => /^#\/(p\/[^/]+\/new|i\/[^/]+\/edit|inventory\/new|settings\/delete)/.test(hash);
   let slideDir = 0;
 
   function updateTabs() {
@@ -2610,6 +2678,7 @@
       else if (parts[0] === 'i' && parts[1]) node = await viewProduct(parts[1]);
       else if (parts[0] === 'settings' && parts[1] === 'new') node = viewWhatsNew();
       else if (parts[0] === 'settings' && parts[1] === 'help') node = viewHelp();
+      else if (parts[0] === 'inventory' && parts[1] === 'new') node = await viewProductForm(null, null, true);
       else if (parts[0] === 'inventory' && parts[1]) node = await viewInventoryItem(decodeURIComponent(parts[1]));
       else if (parts[0] === 'inventory') node = await viewInventory();
       else if (parts[0] === 'reports') node = await viewReports();
@@ -2655,7 +2724,7 @@
   // new app.js runs and shows What's New. The reload waits while the user is
   // busy (a sheet is open, or the add/edit product form is on screen).
   let updateReady = false, reloading = false;
-  const busy = () => $sheetRoot.children.length > 0 || /^#\/(p\/[^/]+\/new|i\/[^/]+\/edit)/.test(location.hash);
+  const busy = () => $sheetRoot.children.length > 0 || /^#\/(p\/[^/]+\/new|i\/[^/]+\/edit|inventory\/new)/.test(location.hash);
   function reloadIfUpdated() {
     if (!updateReady || reloading || busy()) return;
     reloading = true;

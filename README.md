@@ -16,6 +16,10 @@ A phone-first inventory tracker that works offline and installs to your home scr
   project without the product creates it there, Undo removes it again), **Where it is** (a card per
   project with a Storage Location / Product Owner / Qty table; tap through to the project's product
   page) and **Recent activity** (last 5 entries, *See all in Reports* filters Reports to that part number).
+- **Add inventory** (1.12): the button inside a project (was "Add product") and a new one on the Inventory
+  tab (`#/inventory/new`, form starts with a Project dropdown). Quantity starts at 1 so team member,
+  storage location and product owner show. Same part number already in that project blocks the save
+  (offers *Open it*); in another project it offers *Use its description and photos*.
 - **Product photos** (1.11): any number per product. `photo` is the main one (lists, thumbnails),
   `morePhotos` holds the rest (in backups). Edit product › tap a photo to make it main or remove it.
   Product pages show a swipeable strip; tap for full size.

@@ -4,6 +4,17 @@
  * to match (e.g. '1.1-build2'). Builds count up and never reset. */
 window.CHANGELOG = [
   {
+    version: '1.12', build: 14, date: '2026-11-23',
+    title: 'Add inventory from the Inventory tab',
+    changes: [
+      'New Add inventory button on the Inventory tab. The form starts with Project, so you pick where it goes, then the photos, part number, description, quantity, team member, storage location and product owner.',
+      'The Add product button inside a project is now called Add inventory. It works the same way, without the Project question.',
+      'The quantity on the Add inventory form now starts at 1, so the team member, storage location and product owner show right away. Set it to 0 to add the product with no stock yet.',
+      'If the part number is already in that project, the form tells you and offers Open it, so the same product isn\'t listed twice in one project. Use + Add on its page to add stock.',
+      'If the part number is in another project, the form says so and offers Use its description and photos to fill them in for you.',
+    ],
+  },
+  {
     version: '1.11', build: 13, date: '2026-11-23',
     title: 'Clearer product pages and more photos',
     changes: [
