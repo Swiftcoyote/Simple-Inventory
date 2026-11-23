@@ -4,6 +4,16 @@
  * to match (e.g. '1.1-build2'). Builds count up and never reset. */
 window.CHANGELOG = [
   {
+    version: '1.14', build: 17, date: '2026-11-23',
+    title: '⋮ menu on Inventory tab products',
+    changes: [
+      'On the Inventory tab, open a product and tap ⋮ at the top right. It has the same options as inside a project: Edit product and photos, Move stock, Low-stock warning, Correct stock count and Delete product. You no longer have to open a project card first.',
+      'If the product is in more than one project, the option asks Which project? and shows how many each project has in stock.',
+      'Edit product and photos can also change All projects at once: the part number, description and photos you save are used in every project that has this product. Stock doesn\'t change.',
+      'To change a product\'s Product Owner, use Move (the ⇄ Move button or ⋮ › Move stock) and pick the new owner. History keeps a record of it.',
+    ],
+  },
+  {
     version: '1.13', build: 16, date: '2026-11-23',
     title: 'Fix for the "low memory" camera error',
     changes: [

@@ -118,8 +118,8 @@
     });
   }
 
-  function menuSheet(title, items) {
-    sheet(`<h3>${esc(title)}</h3><div class="menu">${items.map((it, i) =>
+  function menuSheet(title, items, desc = '') {
+    sheet(`<h3>${esc(title)}</h3>${desc ? `<p class="desc" style="margin-top:-8px">${esc(desc)}</p>` : ''}<div class="menu">${items.map((it, i) =>
       `<button class="btn ${it.danger ? 'danger' : ''}" data-i="${i}">${esc(it.label)}</button>`).join('')}
       <button class="btn ghost" data-close>Cancel</button></div>`,
       (el, close) => {
@@ -806,12 +806,17 @@
   }
 
   /** New inventory (in a project, or from the Inventory tab with `fromInv`: then the form
-   *  starts with a Project dropdown) or Edit product. */
-  async function viewProductForm(projectId, productId, fromInv = false) {
+   *  starts with a Project dropdown) or Edit product. allKey (1.14): edit every project's
+   *  copy of an Inventory tab item at once (part number, description, photos). */
+  async function viewProductForm(projectId, productId, fromInv = false, allKey = null) {
+    const [projects, people, { items }] = await Promise.all([DB.listProjects(), DB.listPeople(), inventoryItems()]);
+    const allItem = allKey ? items.find(i => i.key === allKey) : null;
+    if (allKey && !allItem) return notFound();
+    const copies = allItem ? allItem.rows.map(r => r.product) : null;
+    if (allItem) productId = copies[0].id;
     const existing = productId ? await DB.getProduct(productId) : null;
     if (productId && !existing) return notFound();
     projectId = projectId || existing?.projectId || null;
-    const [projects, people, { items }] = await Promise.all([DB.listProjects(), DB.listPeople(), inventoryItems()]);
     projects.sort((a, b) => natCmp(a.name, b.name));
     if (fromInv && !projectId) {
       const remembered = ss.get('invLastProj');
@@ -820,9 +825,10 @@
     let project = projects.find(p => p.id === projectId) || null;
     if (!fromInv && !project) return notFound();
     if (fromInv && !projects.length) return h(`<div class="empty">${ICON.box}<b>No projects yet</b>Inventory is kept in projects. Tap <b>Projects</b> at the bottom of the screen and create one first.</div>`);
-    setChrome({ title: existing ? 'Edit product' : 'Add inventory', back: existing ? `#/i/${productId}` : fromInv ? '#/inventory' : `#/p/${projectId}` });
+    setChrome({ title: existing ? 'Edit product' : 'Add inventory',
+      back: allItem ? `#/inventory/${encodeURIComponent(allKey)}` : existing ? `#/i/${productId}` : fromInv ? '#/inventory' : `#/p/${projectId}` });
 
-    const photos = productPhotos(existing || {});   // main photo first
+    const photos = allItem ? allItem.photos.slice() : productPhotos(existing || {});   // main photo first
     const placeStart = (pr) => {
       const last = pr ? lastPlace.get(pr.id) : {};
       return { loc: (pr?.locations || []).includes(last.location) ? last.location : null,
@@ -831,6 +837,7 @@
     const { loc: startLoc, own: startOwner } = placeStart(project);
     const frag = h(`<form autocomplete="off">
       <div class="card banner draft-note" hidden></div>
+      ${allItem ? `<div class="card banner"><b>Editing all ${allItem.rows.length} projects</b>: ${esc(allItem.rows.map(r => r.project.name).join(', '))}. The part number, description and photos you save here are used in every one of them. Stock doesn't change.</div>` : ''}
       ${fromInv ? `<label class="field"><span>Project</span>
         <select class="input" name="proj">
           ${project ? '' : '<option value="" disabled selected>Choose project…</option>'}
@@ -862,10 +869,10 @@
           ${personHtml(people)}
           <div id="placePicks">${locPick(project, startLoc)}${ownPick(project, startOwner)}</div>
         </div>`}
-      <label class="field"><span>Low-stock warning (optional)</span>
+      ${allItem ? '' : `<label class="field"><span>Low-stock warning (optional)</span>
         <input class="input" name="lowStockAt" type="number" inputmode="numeric" min="0" step="1" value="${existing?.lowStockAt ?? ''}" placeholder="Off">
         <small class="hint">Flag this product when the total in stock is at or below this number. Leave empty for no warning.</small>
-      </label>
+      </label>`}
       <div class="actions" style="margin-top:20px">
         <button type="button" class="btn" id="cancel">Cancel</button>
         <button class="btn primary">${existing ? 'Save' : 'Add inventory'}</button>
@@ -932,9 +939,10 @@
       dupHere = null;
       const pn = pnEl.value.trim();
       const it = pn && items.find(i => i.key === `pn:${pn.toLowerCase()}`);
-      const rows = it ? it.rows.filter(r => r.product.id !== existing?.id) : [];
+      const rows = it ? it.rows.filter(r => copies ? !copies.some(c => c.id === r.product.id) : r.product.id !== existing?.id) : [];
       if (!rows.length) { dup.hidden = true; return; }
-      const here = projectId && rows.find(r => r.project.id === projectId);
+      const here = copies ? rows.find(r => copies.some(c => c.projectId === r.project.id))
+        : projectId && rows.find(r => r.project.id === projectId);
       dup.hidden = false;
       if (here) {
         dupHere = here.product;
@@ -1040,6 +1048,12 @@
       if (fromInv && !projectId) { toast('Choose the project to add it to'); form.elements.proj.focus(); return; }
       if (!partNumber && !description) { toast('Add a part number or description'); form.elements.partNumber.focus(); return; }
       if (dupHere) { toast(`Already in ${project.name}. Tap Open it to add stock there.`); dup.scrollIntoView({ block: 'center' }); return; }
+      if (allItem) {
+        for (const c of copies) await DB.saveProduct({ id: c.id, projectId: c.projectId, partNumber, description, photo: photos[0] || null, morePhotos: photos.slice(1) });
+        toast(`Saved in ${plural(copies.length, 'project')}`);
+        goBack(`#/inventory/${encodeURIComponent(invKey({ ...copies[0], partNumber }))}`);
+        return;
+      }
       const lowRaw = form.elements.lowStockAt.value.trim();
       const lowStockAt = lowRaw === '' ? null : parseInt(lowRaw, 10);
       if (lowRaw !== '' && (isNaN(lowStockAt) || lowStockAt < 0)) { toast('Low-stock warning must be 0 or more'); return; }
@@ -1174,6 +1188,21 @@
   const lowRowHtml = (text) => `<button type="button" class="low-row" data-a="low">
       <span class="lr-l">Low-stock warning</span><span class="lr-v">${text}</span>${ICON.chev}</button>`;
 
+  async function correctCount(p) {
+    const r = await countSheet(p);
+    if (!r) return;
+    try {
+      const { movement } = await DB.setCount({ productId: p.id, ...r });
+      toast(movement ? `Count set: ${r.count} at ${placeLabel(r.location, r.owner)}` : 'Count already matches');
+    } catch { toast('Could not save'); }
+    render();
+  }
+  async function deleteProductAsk(p, where = '') {
+    if (!await confirmSheet('Delete product?', `${productName(p)}${where} and its history will be permanently deleted.`)) return false;
+    await DB.deleteProduct(p.id);
+    return true;
+  }
+
   /** A product inside one project: its stock there, where it is, and its History. */
   async function viewProduct(id) {
     const p = await DB.getProduct(id);
@@ -1187,19 +1216,9 @@
         { label: 'Edit product and photos', run: () => go(`#/i/${id}/edit`) },
         ...(item ? [{ label: 'See in all projects', run: () => go(`#/inventory/${encodeURIComponent(item.key)}`, true) }] : []),
         { label: 'Low-stock warning', run: () => lowStockSheet([{ product: p, name: project?.name || 'This project' }]) },
-        { label: 'Correct stock count', run: async () => {
-          const r = await countSheet(p);
-          if (!r) return;
-          try {
-            const { movement } = await DB.setCount({ productId: id, ...r });
-            toast(movement ? `Count set: ${r.count} at ${placeLabel(r.location, r.owner)}` : 'Count already matches');
-          } catch { toast('Could not save'); }
-          render();
-        } },
+        { label: 'Correct stock count', run: () => correctCount(p) },
         { label: 'Delete product', danger: true, run: async () => {
-          if (await confirmSheet('Delete product?', `${productName(p)} and its history will be permanently deleted.`)) {
-            await DB.deleteProduct(id); goBack(`#/p/${p.projectId}`);
-          }
+          if (await deleteProductAsk(p)) goBack(`#/p/${p.projectId}`);
         } },
       ]),
     });
@@ -1393,7 +1412,28 @@
     const [{ items }, projects] = await Promise.all([inventoryItems(), DB.listProjects()]);
     const it = items.find(i => i.key === key);
     if (!it) return notFound();
-    setChrome({ title: it.partNumber || it.description || 'Product', back: '#/inventory' });
+    // ⋮ menu (1.14): the same options as inside a project. With more than one project,
+    // each option first asks which project (Edit can also change all of them at once).
+    const which = (title, rows, run, extra = []) => {
+      if (rows.length === 1 && !extra.length) return run(rows[0]);
+      menuSheet(title, [...extra, ...rows.map(r => ({ label: `${r.project.name} · ${r.product.stock} in stock`, run: () => run(r) }))], 'Which project?');
+    };
+    const name = it.partNumber || it.description || 'Product';
+    setChrome({
+      title: name, back: '#/inventory',
+      menu: () => menuSheet(name, [
+        { label: 'Edit product and photos', run: () => which('Edit product and photos', it.rows, r => go(`#/i/${r.product.id}/edit`),
+          it.rows.length > 1 ? [{ label: `All ${it.rows.length} projects`, run: () => go(`#/inventory/${encodeURIComponent(key)}/edit`) }] : []) },
+        ...(it.total > 0 ? [{ label: 'Move stock', run: () => $view.querySelector('[data-act=move]')?.click() }] : []),
+        { label: 'Low-stock warning', run: () => lowStockSheet(it.rows.map(r => ({ product: r.product, name: r.project.name }))) },
+        { label: 'Correct stock count', run: () => which('Correct stock count', it.rows, r => correctCount(r.product)) },
+        { label: 'Delete product', danger: true, run: () => which('Delete product', it.rows, async r => {
+          if (!await deleteProductAsk(r.product, it.rows.length > 1 ? ` in ${r.project.name}` : '')) return;
+          toast(`Deleted from ${r.project.name}`);
+          if (it.rows.length === 1) goBack('#/inventory'); else render();
+        }) },
+      ]),
+    });
     const nLoc = new Set(it.rows.flatMap(r => r.buckets.filter(b => b.qty).map(b => b.location))).size;
     const descs = [...new Set(it.rows.map(r => r.product.description).filter(Boolean))];
     const low = it.rows.some(r => DB.isLow(r.product));
@@ -2723,7 +2763,7 @@
     setChrome({ title: 'Help', back: '#/settings' });
     const topics = [
       ['Getting around', 'The bar at the bottom of the screen has four tabs: <b>Projects</b> (your projects and their products), <b>Inventory</b> (every product from every project in one list), <b>Reports</b> and <b>Settings</b>. Tap a tab to switch, or swipe left or right on the Projects, Inventory, Reports or Settings screen to move to the next tab. Going back to <b>Projects</b> takes you to the project or product you had open; tap <b>Projects</b> again for the list of projects. The tabs hide while you fill in a product form.'],
-      ['Inventory (all projects)', 'The <b>Inventory</b> tab lists every product from every project, including ones with 0 in stock. Products with the same part number in different projects are shown once with the combined total. Search by part number, description or project, or tap <b>Filters and sort</b>. Tap a product to see its photos, the total in stock and <b>Where it is</b>: a card for each project with its storage locations, product owners and how many are at each. Tap <b>+ Add</b>, <b>⇄ Move</b> or <b>− Remove</b> there and pick the project first. Tap a project card to open the product in that project with its History. <b>Recent activity</b> shows the last 5 changes; tap <b>See all in Reports</b> for the rest.'],
+      ['Inventory (all projects)', 'The <b>Inventory</b> tab lists every product from every project, including ones with 0 in stock. Products with the same part number in different projects are shown once with the combined total. Search by part number, description or project, or tap <b>Filters and sort</b>. Tap a product to see its photos, the total in stock and <b>Where it is</b>: a card for each project with its storage locations, product owners and how many are at each. Tap <b>+ Add</b>, <b>⇄ Move</b> or <b>− Remove</b> there and pick the project first. Tap a project card to open the product in that project with its History. Tap <b>⋮</b> at the top right to edit the product and photos (one project or <b>All projects</b> at once), move stock, set the low-stock warning, correct the count or delete it from a project. To change who owns the stock, use <b>⇄ Move</b> and pick the new Product Owner. <b>Recent activity</b> shows the last 5 changes; tap <b>See all in Reports</b> for the rest.'],
       ['Projects', 'Each project keeps its own inventory. On the <b>Projects</b> tab tap <b>New project</b>. Open a project and tap <b>⋮</b> to rename or delete it.'],
       ['Deleting inventory, projects or all data', 'To delete products but keep their project, tap <b>Settings</b> (bottom of the screen) › <b>Delete inventory</b>, tick the products (or <b>Select all</b> under a project) and tap <b>Delete</b>. To delete whole projects, tap <b>Delete projects</b>, tick the projects you want gone and tap <b>Delete</b>. To wipe everything, tap <b>Delete all data</b> and type <b>DELETE</b> to confirm. Both offer <b>Back up first</b>. A safety copy is kept, so if it was a mistake, tap <b>Undo</b> straight away or <b>Undo last delete</b> in Settings. Only the last restore or delete can be undone.'],
       ['Adding inventory', 'Tap <b>Add inventory</b> on the <b>Inventory</b> tab, or open a project and tap <b>Add inventory</b> there. From the Inventory tab, pick the <b>Project</b> first. Tap the photo box to take a picture, enter the model/part number and a description, then the quantity, team member, storage location and product owner, and tap <b>Add inventory</b>. If that part number is already in the project, the form says so: tap <b>Open it</b> and use <b>+ Add</b> there instead. If it is in another project, tap <b>Use its description and photos</b> to fill them in.'],
@@ -2806,7 +2846,7 @@
   const listSubOf = (hash) => { const m = /^#\/lists(?:\/(locations|owners|team))?$/.exec(hash); return m ? (m[1] || lastList.get()) : null; };
   const isTabRoot = (hash) => /^(#\/?)?$/.test(hash) || hash === '#/inventory' || hash === '#/reports' || hash === '#/settings' || !!listSubOf(hash);
   // forms and the delete screens have their own bottom buttons, so no tab bar there
-  const noTabs = (hash) => /^#\/(p\/[^/]+\/new|i\/[^/]+\/edit|inventory\/new|settings\/delete)/.test(hash);
+  const noTabs = (hash) => /^#\/(p\/[^/]+\/new|i\/[^/]+\/edit|inventory\/new|inventory\/[^/]+\/edit|settings\/delete)/.test(hash);
   let slideDir = 0;
 
   function updateTabs() {
@@ -2889,6 +2929,7 @@
       else if (parts[0] === 'settings' && parts[1] === 'new') node = viewWhatsNew();
       else if (parts[0] === 'settings' && parts[1] === 'help') node = viewHelp();
       else if (parts[0] === 'inventory' && parts[1] === 'new') node = await viewProductForm(null, null, true);
+      else if (parts[0] === 'inventory' && parts[1] && parts[2] === 'edit') node = await viewProductForm(null, null, false, decodeURIComponent(parts[1]));
       else if (parts[0] === 'inventory' && parts[1]) node = await viewInventoryItem(decodeURIComponent(parts[1]));
       else if (parts[0] === 'inventory') node = await viewInventory();
       else if (parts[0] === 'reports') node = await viewReports();
@@ -2942,7 +2983,7 @@
   // new app.js runs and shows What's New. The reload waits while the user is
   // busy (a sheet is open, or the add/edit product form is on screen).
   let updateReady = false, reloading = false;
-  const busy = () => $sheetRoot.children.length > 0 || /^#\/(p\/[^/]+\/new|i\/[^/]+\/edit|inventory\/new)/.test(location.hash);
+  const busy = () => $sheetRoot.children.length > 0 || /^#\/(p\/[^/]+\/new|i\/[^/]+\/edit|inventory\/new|inventory\/[^/]+\/edit)/.test(location.hash);
   function reloadIfUpdated() {
     if (!updateReady || reloading || busy()) return;
     reloading = true;
