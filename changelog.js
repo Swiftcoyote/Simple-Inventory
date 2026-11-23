@@ -4,6 +4,18 @@
  * to match (e.g. '1.1-build2'). Builds count up and never reset. */
 window.CHANGELOG = [
   {
+    version: '1.13', build: 16, date: '2026-11-23',
+    title: 'Fix for the "low memory" camera error',
+    changes: [
+      'Taking a photo no longer leaves the app. Tapping the photo box (or Take photo) now opens a camera right inside Simple Inventory. Tap the round button, then Use photo or Retake. This fixes the "low memory, couldn\'t complete previous action" error some phones showed, which lost the photo and the form.',
+      'The first time, the phone asks to allow the camera for this app. Tap Allow.',
+      'The ⚡ button in the camera turns on the flashlight, on phones that have one.',
+      'If the in-app camera can\'t start, tap Use phone camera to use your phone\'s Camera app as before. Choose from library works as before.',
+      'The Add inventory form now saves what you type as you go. If the app gets closed before you tap Add inventory, open the form again and it is filled back in, photos included. Tap Start over to clear it. When the app opens on another screen, a message offers Open it.',
+      'Settings shows Storage on this phone: how much room the app uses, and whether the phone keeps its data safe from clean-up.',
+    ],
+  },
+  {
     version: '1.13', build: 15, date: '2026-11-23',
     title: 'Low-stock warning on the product page',
     changes: [
