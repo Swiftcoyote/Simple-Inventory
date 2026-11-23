@@ -862,6 +862,183 @@
     return frag;
   }
 
+  // ---------- Inventory tab (1.9): every product from every project ----------
+  // Products with the same part number in different projects are one item here,
+  // with a combined total. Products without a part number stay on their own.
+  const invKey = (p) => (p.partNumber || '').trim() ? `pn:${p.partNumber.trim().toLowerCase()}` : `id:${p.id}`;
+  const invState = { q: '', proj: '__all', loc: '__all', own: '__all', low: false, sort: 'pn' };
+  const natCmp = (a, b) => (a || '').localeCompare(b || '', undefined, { numeric: true, sensitivity: 'base' });
+
+  async function inventoryItems() {
+    const data = await DB.exportAll();
+    const projById = Object.fromEntries(data.projects.map(p => [p.id, p]));
+    const movesBy = {};
+    for (const m of data.movements) (movesBy[m.productId] || (movesBy[m.productId] = [])).push(m);
+    const items = new Map();
+    for (const p of data.products) {
+      if (!projById[p.projectId]) continue;
+      const k = invKey(p);
+      const it = items.get(k) || { key: k, partNumber: p.partNumber || '', description: '', photo: null, rows: [] };
+      if (!it.description && p.description) it.description = p.description;
+      if (!it.photo && p.photo) it.photo = p.photo;
+      it.rows.push({ product: p, project: projById[p.projectId], buckets: DB.bucketsOf(movesBy[p.id] || []) });
+      items.set(k, it);
+    }
+    for (const it of items.values()) {
+      it.rows.sort((a, b) => natCmp(a.project.name, b.project.name));
+      it.total = it.rows.reduce((a, r) => a + r.product.stock, 0);
+      it.low = it.rows.some(r => DB.isLow(r.product));
+      it.locations = new Set(it.rows.flatMap(r => r.buckets.filter(b => b.qty).map(b => b.location)));
+    }
+    return { items: [...items.values()], projects: data.projects.slice().sort((a, b) => natCmp(a.name, b.name)) };
+  }
+
+  async function viewInventory() {
+    setChrome({ title: 'Inventory' });
+    const { items, projects } = await inventoryItems();
+    const st = invState;
+    const locs = new Set(), owns = new Set();
+    for (const it of items) for (const r of it.rows) for (const b of r.buckets) { locs.add(b.location); owns.add(b.owner); }
+    for (const p of projects) { (p.locations || []).forEach(n => locs.add(n)); (p.owners || []).forEach(n => owns.add(n)); }
+    if (st.proj !== ALL && !projects.some(p => p.id === st.proj)) st.proj = ALL;
+    if (st.loc !== ALL && !locs.has(st.loc)) st.loc = ALL;
+    if (st.own !== ALL && !owns.has(st.own)) st.own = ALL;
+    const opts = (set, cur) => [...set].sort((a, b) => (a === '') - (b === '') || natCmp(a, b))
+      .map(n => `<option value="${esc(n)}" ${cur === n ? 'selected' : ''}>${esc(n || NOT_SET)}</option>`).join('');
+    const sel = (name, label, inner, cur) => `<label class="field"><span>${label}</span>
+      <select class="input" name="${name}"><option value="${ALL}" ${cur === ALL ? 'selected' : ''}>All</option>${inner}</select></label>`;
+    const nFilters = () => [st.proj, st.loc, st.own].filter(v => v !== ALL).length;
+    const lowCount = items.filter(i => i.low).length;
+    if (!lowCount) st.low = false;
+
+    const frag = h(`<div>
+      ${items.length ? `
+        <input class="search" type="search" placeholder="Search part #, description or project" value="${esc(st.q)}" autocomplete="off" enterkeyhint="search">
+        <form class="card rfilters inv-filters" autocomplete="off">
+          <details class="more-filters" ${nFilters() ? 'open' : ''}>
+            <summary>Filters and sort${nFilters() ? ` (${nFilters()})` : ''}</summary>
+            ${sel('proj', 'Project', projects.map(p => `<option value="${esc(p.id)}" ${st.proj === p.id ? 'selected' : ''}>${esc(p.name)}</option>`).join(''), st.proj)}
+            ${sel('loc', 'Storage Location', opts(locs, st.loc), st.loc)}
+            ${sel('own', 'Product Owner', opts(owns, st.own), st.own)}
+            <label class="field"><span>Sort by</span><select class="input" name="sort">
+              ${[['pn', 'Part number'], ['desc', 'Description'], ['low', 'Lowest stock first']].map(([v, l]) => `<option value="${v}" ${st.sort === v ? 'selected' : ''}>${l}</option>`).join('')}
+            </select></label>
+            <button type="button" class="link-btn" data-a="clear" ${nFilters() ? '' : 'hidden'}>Clear filters</button>
+          </details>
+        </form>
+        <div class="summary-row">
+          <div class="summary" id="invSum"></div>
+          ${lowCount ? `<button class="filter ${st.low ? 'on' : ''}" id="lowOnly" aria-pressed="${st.low}">Low stock only (${lowCount})</button>` : ''}
+        </div>
+        <div class="list" id="ilist"></div>`
+      : `<div class="empty">${ICON.box}<b>No products yet</b>Products you add in any project show up here, all in one list.</div>`}
+    </div>`);
+
+    const list = frag.getElementById('ilist'), sumEl = frag.getElementById('invSum');
+    const draw = () => {
+      if (!list) return;
+      const q = st.q.trim().toLowerCase();
+      const shown = [];
+      for (const it of items) {
+        let rows = it.rows.filter(r => st.proj === ALL || r.project.id === st.proj);
+        const placeOk = (b) => (st.loc === ALL || b.location === st.loc) && (st.own === ALL || b.owner === st.own);
+        const placed = st.loc === ALL && st.own === ALL;
+        if (!placed) rows = rows.filter(r => r.buckets.some(placeOk));
+        if (!rows.length) continue;
+        if (q && !`${it.partNumber} ${it.description} ${it.rows.map(r => `${r.product.description} ${r.project.name}`).join(' ')}`.toLowerCase().includes(q)) continue;
+        if (st.low && !it.low) continue;
+        const qty = placed ? rows.reduce((a, r) => a + r.product.stock, 0)
+          : rows.reduce((a, r) => a + r.buckets.filter(placeOk).reduce((s, b) => s + b.qty, 0), 0);
+        shown.push({ it, rows, qty });
+      }
+      const cmp = { pn: (a, b) => natCmp(a.it.partNumber || a.it.description, b.it.partNumber || b.it.description),
+        desc: (a, b) => natCmp(a.it.description || a.it.partNumber, b.it.description || b.it.partNumber),
+        low: (a, b) => a.qty - b.qty || natCmp(a.it.partNumber, b.it.partNumber) }[st.sort];
+      shown.sort(cmp);
+      const units = shown.reduce((a, s) => a + s.qty, 0);
+      sumEl.textContent = `${plural(shown.length, 'product')} · ${plural(units, 'unit')}${st.loc !== ALL || st.own !== ALL ? ' there' : ' in stock'}`;
+      list.replaceChildren(h(shown.length ? shown.map(({ it, rows, qty }) => {
+        const projNames = rows.map(r => r.project.name);
+        const where = projNames.length === 1 ? esc(projNames[0]) : `${projNames.length} projects`;
+        const nLoc = it.locations.size;
+        return `<a class="card row" href="#/inventory/${encodeURIComponent(it.key)}">
+          ${it.photo ? `<img class="thumb" alt="" src="${blobUrl(it.photo)}">` : `<div class="thumb">${ICON.box}</div>`}
+          <div class="grow"><div class="t">${esc(it.partNumber || '—')}${it.low ? ' <span class="tag low">Low</span>' : ''}</div>
+            <div class="s">${esc(it.description)}</div>
+            <div class="s inv-where">${where}${nLoc ? ` · ${plural(nLoc, 'storage location')}` : ''}</div></div>
+          <div class="count ${qty ? '' : 'zero'}"><span class="n">${qty}</span><span class="l">${st.loc !== ALL || st.own !== ALL ? 'there' : 'in stock'}</span></div>
+        </a>`;
+      }).join('') : `<div class="empty">No products match${q ? ` “${esc(st.q)}”` : ''}${st.low ? ' in low stock' : ''}${nFilters() ? ' with these filters' : ''}.</div>`));
+    };
+
+    const s = frag.querySelector('.search');
+    if (s) s.oninput = () => { st.q = s.value; draw(); };
+    const lo = frag.getElementById('lowOnly');
+    if (lo) lo.onclick = () => { st.low = !st.low; lo.classList.toggle('on', st.low); lo.setAttribute('aria-pressed', st.low); draw(); };
+    const f = frag.querySelector('form.inv-filters');
+    if (f) {
+      const sync = () => {
+        const n = nFilters();
+        f.querySelector('summary').textContent = `Filters and sort${n ? ` (${n})` : ''}`;
+        f.querySelector('[data-a="clear"]').hidden = !n;
+      };
+      f.addEventListener('change', (e) => { st[e.target.name] = e.target.value; sync(); draw(); });
+      f.querySelector('[data-a="clear"]').onclick = () => {
+        st.proj = st.loc = st.own = ALL;
+        for (const n of ['proj', 'loc', 'own']) f.elements[n].value = ALL;
+        sync(); draw();
+      };
+    }
+    draw();
+    return frag;
+  }
+
+  async function viewInventoryItem(key) {
+    const { items } = await inventoryItems();
+    const it = items.find(i => i.key === key);
+    if (!it) return notFound();
+    setChrome({ title: it.partNumber || it.description || 'Product', back: '#/inventory' });
+    const byLoc = new Map(), byOwn = new Map();
+    for (const r of it.rows) for (const b of r.buckets) {
+      if (!b.qty) continue;
+      byLoc.set(b.location, (byLoc.get(b.location) || 0) + b.qty);
+      byOwn.set(b.owner, (byOwn.get(b.owner) || 0) + b.qty);
+    }
+    const sortNames = (m) => [...m].sort((a, b) => (a[0] === '') - (b[0] === '') || natCmp(a[0], b[0]));
+    const nameList = (m) => `<ul class="card places inv-places">${sortNames(m).map(([n, q]) => `<li><span class="pl">${nameHtml(n)}</span><b>${q}</b></li>`).join('')}</ul>`;
+    const descs = [...new Set(it.rows.map(r => r.product.description).filter(Boolean))];
+    const frag = h(`<div>
+      ${it.photo ? `<img class="hero" alt="" src="${blobUrl(it.photo)}">` : `<div class="hero">${ICON.camera}</div>`}
+      <div class="pn">${esc(it.partNumber || '—')}</div>
+      ${descs.map(d => `<p class="desc">${esc(d)}</p>`).join('')}
+      <div class="card stockbox-wrap">
+        <div class="stockbox">
+          <div><div class="lbl">Total in stock</div>
+            <div class="low-line">${plural(it.rows.length, 'project')} · ${plural(byLoc.size, 'storage location')}</div></div>
+          <div class="big ${it.total ? '' : 'zero'}">${it.total}</div>
+        </div>
+      </div>
+      <h2 class="section">Projects</h2>
+      <p class="hint inv-hint">Tap a project to add, remove or move stock there and see its History.</p>
+      <div class="list">${it.rows.map(({ product: p, project, buckets }) => {
+        const low = DB.isLow(p), places = buckets.filter(b => b.qty);
+        return `<a class="card inv-proj" href="#/i/${p.id}">
+          <div class="row">
+            <div class="proj-icon">${esc((project.name.trim()[0] || '?').toUpperCase())}</div>
+            <div class="grow"><div class="t">${esc(project.name)}${low ? ' <span class="tag low">Low</span>' : ''}</div>
+              ${p.lowStockAt != null ? `<div class="s">Warns at ${p.lowStockAt} or less</div>` : ''}</div>
+            <div class="count ${p.stock ? '' : 'zero'} ${low ? 'low' : ''}"><span class="n">${p.stock}</span><span class="l">in stock</span></div>
+            ${ICON.chev}
+          </div>
+          ${places.length ? `<ul class="places">${places.map(b => `<li><span class="pl">${placeHtml(b.location, b.owner)}</span><b>${b.qty}</b></li>`).join('')}</ul>` : ''}
+        </a>`;
+      }).join('')}</div>
+      ${byLoc.size ? `<h2 class="section">By storage location</h2>${nameList(byLoc)}` : ''}
+      ${byOwn.size ? `<h2 class="section">By product owner</h2>${nameList(byOwn)}` : ''}
+    </div>`);
+    return frag;
+  }
+
   // ---------- locations & owners manager ----------
   async function viewPlaces(id) {
     const project = await DB.getProject(id);
@@ -1827,7 +2004,8 @@
   function viewHelp() {
     setChrome({ title: 'Help', back: '#/settings' });
     const topics = [
-      ['Getting around', 'The bar at the bottom of the screen has three tabs: <b>Projects</b> (your projects and their products), <b>Reports</b> and <b>Settings</b>. Tap a tab to switch, or swipe left or right on the Inventory, Reports or Settings screen to move to the next tab. Going back to <b>Inventory</b> takes you to the project or product you had open; tap <b>Inventory</b> again for the list of projects. The tabs hide while you fill in a product form.'],
+      ['Getting around', 'The bar at the bottom of the screen has four tabs: <b>Projects</b> (your projects and their products), <b>Inventory</b> (every product from every project in one list), <b>Reports</b> and <b>Settings</b>. Tap a tab to switch, or swipe left or right on the Projects, Inventory, Reports or Settings screen to move to the next tab. Going back to <b>Projects</b> takes you to the project or product you had open; tap <b>Projects</b> again for the list of projects. The tabs hide while you fill in a product form.'],
+      ['Inventory (all projects)', 'The <b>Inventory</b> tab lists every product from every project, including ones with 0 in stock. Products with the same part number in different projects are shown once with the combined total. Search by part number, description or project, tap <b>Filters and sort</b> to look at one project, storage location or product owner or to change the order, or tap <b>Low stock only</b>. Tap a product to see the total, how much is in each project and where, and totals by storage location and product owner. Tap a project there to add, remove or move stock.'],
       ['Projects', 'Each project keeps its own inventory. On the <b>Projects</b> tab tap <b>New project</b>. Open a project and tap <b>⋮</b> to rename or delete it.'],
       ['Deleting inventory, projects or all data', 'To delete products but keep their project, tap <b>Settings</b> (bottom of the screen) › <b>Delete inventory</b>, tick the products (or <b>Select all</b> under a project) and tap <b>Delete</b>. To delete whole projects, tap <b>Delete projects</b>, tick the projects you want gone and tap <b>Delete</b>. To wipe everything, tap <b>Delete all data</b> and type <b>DELETE</b> to confirm. Both offer <b>Back up first</b>. A safety copy is kept, so if it was a mistake, tap <b>Undo</b> straight away or <b>Undo last delete</b> in Settings. Only the last restore or delete can be undone.'],
       ['Adding a product', 'Open a project and tap <b>Add product</b>. Tap the photo box to take a picture, enter the model/part number and a description, set the starting quantity, then tap <b>Add product</b>.'],
@@ -1894,14 +2072,16 @@
   }
 
   // ---------- tabs (1.8) ----------
-  // Three top-level tabs. Switching tabs replaces the history entry instead of
-  // adding one, so the ‹ back button inside a project still goes to the parent
-  // screen. Inventory remembers the project or product you had open.
-  const TABS = ['inv', 'rep', 'set'];
-  const TAB_ROOT = { inv: '#/', rep: '#/reports', set: '#/settings' };
+  // Four top-level tabs (1.9: Projects, Inventory, Reports, Settings). 'inv' is the
+  // Projects tab (it was called Inventory in 1.8); 'all' is the all-projects Inventory.
+  // Switching tabs replaces the history entry instead of adding one, so the ‹ back
+  // button inside a project still goes to the parent screen. Projects remembers the
+  // project or product you had open.
+  const TABS = ['inv', 'all', 'rep', 'set'];
+  const TAB_ROOT = { inv: '#/', all: '#/inventory', rep: '#/reports', set: '#/settings' };
   const curHash = () => location.hash || '#/';
-  const tabOf = (hash) => /^#\/reports/.test(hash) ? 'rep' : /^#\/settings/.test(hash) ? 'set' : 'inv';
-  const isTabRoot = (hash) => /^(#\/?)?$/.test(hash) || hash === '#/reports' || hash === '#/settings';
+  const tabOf = (hash) => /^#\/inventory/.test(hash) ? 'all' : /^#\/reports/.test(hash) ? 'rep' : /^#\/settings/.test(hash) ? 'set' : 'inv';
+  const isTabRoot = (hash) => /^(#\/?)?$/.test(hash) || hash === '#/inventory' || hash === '#/reports' || hash === '#/settings';
   // forms and the delete screens have their own bottom buttons, so no tab bar there
   const noTabs = (hash) => /^#\/(p\/[^/]+\/new|i\/[^/]+\/edit|settings\/delete)/.test(hash);
   let slideDir = 0;
@@ -1978,6 +2158,8 @@
       else if (parts[0] === 'i' && parts[1]) node = await viewProduct(parts[1]);
       else if (parts[0] === 'settings' && parts[1] === 'new') node = viewWhatsNew();
       else if (parts[0] === 'settings' && parts[1] === 'help') node = viewHelp();
+      else if (parts[0] === 'inventory' && parts[1]) node = await viewInventoryItem(decodeURIComponent(parts[1]));
+      else if (parts[0] === 'inventory') node = await viewInventory();
       else if (parts[0] === 'reports') node = await viewReports();
       else if (parts[0] === 'settings' && parts[1] === 'people') node = await viewPeople();
       else if (parts[0] === 'settings' && parts[1] === 'delete-items') node = await viewDeleteItems();
