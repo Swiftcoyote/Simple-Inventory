@@ -2,7 +2,9 @@
  *
  * Stores
  *   projects  { id, name, locations: [names], owners: [names], createdAt, updatedAt }
- *               locations/owners are the project's pick lists (added in 1.3; missing = empty).
+ *               locations/owners are the names this project uses (added in 1.3; missing =
+ *               empty). Since 1.10 they are shown first ("This project") in the pickers;
+ *               the full lists are app-wide (meta 'locations' / 'owners').
  *   products  { id, projectId, partNumber, description, photo (Blob|null), stock,
  *               lowStockAt (number|null: flag when stock <= this), barcode, location
  *               (barcode/location unused, kept null), createdAt, updatedAt }
@@ -20,6 +22,10 @@
  *               1.4), 'delete' (some projects) or 'deleteAll'. Only one copy is kept.
  *               'people' (1.6) = [names]: the app-wide People list (Settings › People),
  *               offered on Add, Remove, Move and Correct count. Backed up with the data.
+ *               'locations', 'owners' (1.10) = [names]: the app-wide Storage Location and
+ *               Product Owner lists (Lists tab), shared by every project.
+ *               'locPhotos' (1.10) = { [location name]: [{ id, label, photo (Blob), at }] }:
+ *               any number of named photos per storage location.
  *
  * Stock is counted per place (location + owner): the sum of entries at that place.
  * Invariants: product.stock === sum(movement.delta) for that product, and no place
@@ -27,7 +33,7 @@
  */
 const DB = (() => {
   const NAME = 'simple-inventory';
-  const VERSION = 3;
+  const VERSION = 4;
   let dbp;
 
   function open() {
@@ -49,7 +55,10 @@ const DB = (() => {
         if (e.oldVersion > 0 && e.oldVersion < 2) reconcile(req.transaction);
         // Version 3 (app 1.4): 'meta' holds the safety copy saved before a restore.
         if (e.oldVersion < 3) db.createObjectStore('meta');
-        // Future versions: add `if (e.oldVersion < 4) { ... }` blocks here.
+        // Version 4 (app 1.10): one app-wide list of storage locations and product owners,
+        // seeded from every project's own lists.
+        if (e.oldVersion > 0 && e.oldVersion < 4) seedShared(req.transaction);
+        // Future versions: add `if (e.oldVersion < 5) { ... }` blocks here.
       };
       req.onsuccess = () => resolve(req.result);
       req.onerror = () => reject(req.error);
@@ -81,6 +90,23 @@ const DB = (() => {
         c2.continue();
       };
     };
+  }
+
+  /** Version 4: the app-wide lists start as every name any project already had. */
+  function seedShared(tx) {
+    tx.objectStore('projects').getAll().onsuccess = (ev) => {
+      const lists = sharedFrom(ev.target.result);
+      tx.objectStore('meta').put(lists.locations, 'locations');
+      tx.objectStore('meta').put(lists.owners, 'owners');
+    };
+  }
+  function sharedFrom(projects) {
+    const L = new Set(), O = new Set();
+    for (const p of projects || []) {
+      (p.locations || []).forEach(n => { n = tidy(n); if (n) L.add(n); });
+      (p.owners || []).forEach(n => { n = tidy(n); if (n) O.add(n); });
+    }
+    return { locations: [...L].sort(nameSort), owners: [...O].sort(nameSort) };
   }
 
   const uid = () => (crypto.randomUUID ? crypto.randomUUID() :
@@ -121,9 +147,11 @@ const DB = (() => {
   }
   const getProject = (id) => get('projects', id);
 
-  async function saveProject({ id, name }) {
+  /** Creates or renames a project. owners (1.10, optional): the project's product owners,
+   *  picked on the New project form; new names also go on the app-wide list. */
+  async function saveProject({ id, name, owners }) {
     const db = await open();
-    const tx = db.transaction('projects', 'readwrite');
+    const tx = db.transaction(['projects', 'meta'], 'readwrite');
     const s = tx.objectStore('projects');
     let rec;
     if (id) {
@@ -131,6 +159,10 @@ const DB = (() => {
       rec.name = name; rec.updatedAt = now();
     } else {
       rec = { id: uid(), name, locations: [], owners: [], createdAt: now(), updatedAt: now() };
+    }
+    if (owners) {
+      rec.owners = uniq(owners.map(tidy).filter(Boolean));
+      await pushShared(tx.objectStore('meta'), 'owners', rec.owners);
     }
     s.put(rec);
     await done(tx);
@@ -146,8 +178,8 @@ const DB = (() => {
     const db = await open();
     const tx = db.transaction([...DATA_STORES, 'meta'], 'readwrite');
     const [projects, products, movements] = await Promise.all(DATA_STORES.map(n => reqP(tx.objectStore(n).getAll())));
-    const people = (await reqP(tx.objectStore('meta').get('people'))) || [];
-    tx.objectStore('meta').put({ savedAt: now(), reason: 'delete', data: { projects, products, movements, people } }, 'beforeRestore');
+    const extra = await metaLists(tx.objectStore('meta'));
+    tx.objectStore('meta').put({ savedAt: now(), reason: 'delete', data: { projects, products, movements, ...extra } }, 'beforeRestore');
     for (const p of projects) if (dropProj.has(p.id)) tx.objectStore('projects').delete(p.id);
     for (const p of products) if (dropProj.has(p.projectId) || dropProd.has(p.id)) tx.objectStore('products').delete(p.id);
     for (const m of movements) if (dropProj.has(m.projectId) || dropProd.has(m.productId)) tx.objectStore('movements').delete(m.id);
@@ -158,9 +190,33 @@ const DB = (() => {
   const deleteProject = (id) => deleteProjects([id]);
 
   // ---------- locations & owners ----------
-  // Each project keeps two name lists: project.locations and project.owners. A name is
-  // added the first time it is used on an entry. Old entries have no location/owner
-  // ('' = "Not set"). Stock is counted per location + owner pair ("place").
+  // Since 1.10 there is one app-wide list of each (meta 'locations' / 'owners', the Lists
+  // tab). Each project still keeps the names it uses (project.locations / owners), shown
+  // first in its pickers. A name is added to both the first time it is used on an entry.
+  // Old entries have no location/owner ('' = "Not set"). Stock is counted per
+  // location + owner pair ("place").
+  const KINDS = ['locations', 'owners'];
+  const uniq = (list) => list.filter((n, i) => list.indexOf(n) === i);
+  /** Adds names to an app-wide list (inside a transaction on 'meta'). */
+  async function pushShared(meta, kind, names) {
+    names = names.map(tidy).filter(Boolean);
+    if (!names.length) return;
+    const list = (await reqP(meta.get(kind))) || [];
+    let changed = false;
+    for (const n of names) if (!list.includes(n)) { list.push(n); changed = true; }
+    if (changed) meta.put(list.sort(nameSort), kind);
+  }
+  /** The app-wide lists kept in 'meta', for backups and safety copies. */
+  async function metaLists(meta) {
+    const [people, locations, owners, locPhotos] = await Promise.all(['people', 'locations', 'owners', 'locPhotos'].map(k => reqP(meta.get(k))));
+    return { people: people || [], locations: locations || [], owners: owners || [], locPhotos: locPhotos || {} };
+  }
+  async function listNames() {
+    const db = await open();
+    const s = db.transaction('meta').objectStore('meta');
+    const [locations, owners] = await Promise.all(KINDS.map(k => reqP(s.get(k))));
+    return { locations: (locations || []).slice(), owners: (owners || []).slice() };
+  }
 
   /** Stock per place, from a product's entries. Returns [{ location, owner, qty }],
    *  including places that have dropped to 0. A 'move' entry takes qty from
@@ -206,7 +262,7 @@ const DB = (() => {
    *  the sum of all entries and new names are added to the project's lists. */
   async function change({ productId, movementId }, fn) {
     const db = await open();
-    const tx = db.transaction(['projects', 'products', 'movements'], 'readwrite');
+    const tx = db.transaction(['projects', 'products', 'movements', 'meta'], 'readwrite');
     const ms = tx.objectStore('movements'), ps = tx.objectStore('products'), prs = tx.objectStore('projects');
     let m0 = null;
     if (movementId) {
@@ -232,58 +288,135 @@ const DB = (() => {
     for (const id of del) ms.delete(id);
     const project = await reqP(prs.get(p.projectId));
     if (addNames(project, put)) prs.put(project);
+    const meta = tx.objectStore('meta');
+    await pushShared(meta, 'locations', put.flatMap(m => [m.location, m.kind === 'move' ? m.toLocation : '']));
+    await pushShared(meta, 'owners', put.flatMap(m => [m.owner, m.kind === 'move' ? m.toOwner : '']));
     await done(tx);
     await addPeople(put.map(m => m.person));
     return typeof r.value === 'function' ? r.value(p) : r.value;
   }
 
-  /** Renames a location or owner (kind 'locations' | 'owners') in the project's list
-   *  and on every entry that uses it. Renaming onto an existing name merges the two. */
-  async function renameName(projectId, kind, from, to) {
-    to = (to || '').trim();
+  /** Renames a storage location or product owner (kind 'locations' | 'owners') on the
+   *  app-wide list, in every project and on every entry (and its earlier versions).
+   *  A location's photos go with it. Renaming onto an existing name merges the two. */
+  async function renameName(kind, from, to) {
+    to = tidy(to);
     if (!to || to === from) return;
     const db = await open();
-    const tx = db.transaction(['projects', 'movements'], 'readwrite');
-    const prs = tx.objectStore('projects'), ms = tx.objectStore('movements');
-    const project = await reqP(prs.get(projectId));
-    const list = (project[kind] || []).map(n => n === from ? to : n);
-    project[kind] = list.filter((n, i) => list.indexOf(n) === i);
-    project.updatedAt = now();
-    prs.put(project);
+    const tx = db.transaction(['projects', 'movements', 'meta'], 'readwrite');
+    const prs = tx.objectStore('projects'), ms = tx.objectStore('movements'), meta = tx.objectStore('meta');
+    const swap = (list) => uniq((list || []).map(n => n === from ? to : n));
+    meta.put(swap(await reqP(meta.get(kind))).sort(nameSort), kind);
+    for (const p of await reqP(prs.getAll())) {
+      if ((p[kind] || []).includes(from)) { p[kind] = swap(p[kind]); p.updatedAt = now(); prs.put(p); }
+    }
     const [a, b] = kind === 'locations' ? ['location', 'toLocation'] : ['owner', 'toOwner'];
-    const moves = await reqP(ms.index('projectId').getAll(projectId));
-    for (const m of moves) {
+    for (const m of await reqP(ms.getAll())) {
       let hit = false;
-      if (m[a] === from) { m[a] = to; hit = true; }
-      if (m[b] === from) { m[b] = to; hit = true; }
+      for (const r of [m, ...(m.edits || [])]) {
+        if (r[a] === from) { r[a] = to; hit = true; }
+        if (r[b] === from) { r[b] = to; hit = true; }
+      }
       if (hit) ms.put(m);
+    }
+    if (kind === 'locations') {
+      const photos = (await reqP(meta.get('locPhotos'))) || {};
+      if (photos[from]) {
+        photos[to] = [...(photos[to] || []), ...photos[from]];
+        delete photos[from];
+        meta.put(photos, 'locPhotos');
+      }
     }
     await done(tx);
   }
 
-  /** Takes a name off the project's list. Entries that use it keep it. */
-  async function removeName(projectId, kind, name) {
+  /** Takes a name off the app-wide list and every project's list (and deletes a
+   *  location's photos). Entries that use it keep it. */
+  async function removeName(kind, name) {
     const db = await open();
-    const tx = db.transaction('projects', 'readwrite');
-    const s = tx.objectStore('projects');
-    const project = await reqP(s.get(projectId));
-    project[kind] = (project[kind] || []).filter(n => n !== name);
-    s.put(project);
+    const tx = db.transaction(['projects', 'meta'], 'readwrite');
+    const prs = tx.objectStore('projects'), meta = tx.objectStore('meta');
+    meta.put(((await reqP(meta.get(kind))) || []).filter(n => n !== name), kind);
+    for (const p of await reqP(prs.getAll())) {
+      if ((p[kind] || []).includes(name)) { p[kind] = p[kind].filter(n => n !== name); prs.put(p); }
+    }
+    if (kind === 'locations') {
+      const photos = (await reqP(meta.get('locPhotos'))) || {};
+      if (photos[name]) { delete photos[name]; meta.put(photos, 'locPhotos'); }
+    }
     await done(tx);
   }
 
-  async function addName(projectId, kind, name) {
-    name = (name || '').trim();
+  /** Adds a name to the app-wide list (and to one project's list when projectId is given). */
+  async function addName(kind, name, projectId = null) {
+    name = tidy(name);
     if (!name) return;
     const db = await open();
-    const tx = db.transaction('projects', 'readwrite');
+    const tx = db.transaction(['projects', 'meta'], 'readwrite');
+    await pushShared(tx.objectStore('meta'), kind, [name]);
+    if (projectId) {
+      const s = tx.objectStore('projects');
+      const project = await reqP(s.get(projectId));
+      if (project && !(project[kind] || []).includes(name)) { project[kind] = [...(project[kind] || []), name]; s.put(project); }
+    }
+    await done(tx);
+  }
+
+  /** Sets which names a project uses (its "This project" group), e.g. its product owners.
+   *  New names also go on the app-wide list. */
+  async function setProjectNames(projectId, kind, names) {
+    const db = await open();
+    const tx = db.transaction(['projects', 'meta'], 'readwrite');
     const s = tx.objectStore('projects');
     const project = await reqP(s.get(projectId));
-    const list = project[kind] || [];
-    if (!list.includes(name)) list.push(name);
-    project[kind] = list;
+    project[kind] = uniq(names.map(tidy).filter(Boolean));
+    project.updatedAt = now();
     s.put(project);
+    await pushShared(tx.objectStore('meta'), kind, project[kind]);
     await done(tx);
+  }
+
+  // ---------- storage location photos (1.10) ----------
+  // Any number of photos per location, each with a name the user types (Door, Shelves…).
+  async function locPhotosTx(fn) {
+    const db = await open();
+    const tx = db.transaction('meta', 'readwrite');
+    const meta = tx.objectStore('meta');
+    const all = (await reqP(meta.get('locPhotos'))) || {};
+    const r = fn(all);
+    meta.put(all, 'locPhotos');
+    await done(tx);
+    return r;
+  }
+  async function listLocPhotos() { return (await get('meta', 'locPhotos')) || {}; }
+  const addLocPhoto = (location, label, photo) => locPhotosTx(all => {
+    const rec = { id: uid(), label: tidy(label), photo, at: now() };
+    (all[location] = all[location] || []).push(rec);
+    return rec.id;
+  });
+  const renameLocPhoto = (location, id, label) => locPhotosTx(all => {
+    const r = (all[location] || []).find(x => x.id === id);
+    if (r) r.label = tidy(label);
+  });
+  const removeLocPhoto = (location, id) => locPhotosTx(all => {
+    all[location] = (all[location] || []).filter(x => x.id !== id);
+    if (!all[location].length) delete all[location];
+  });
+
+  /** Everything in stock right now, one row per product and place with qty > 0. */
+  async function stockRows() {
+    const db = await open();
+    const tx = db.transaction(DATA_STORES);
+    const [projects, products, movements] = await Promise.all(DATA_STORES.map(n => reqP(tx.objectStore(n).getAll())));
+    const byProd = {};
+    for (const m of movements) (byProd[m.productId] = byProd[m.productId] || []).push(m);
+    const proj = Object.fromEntries(projects.map(p => [p.id, p]));
+    const rows = [];
+    for (const p of products) {
+      if (!proj[p.projectId]) continue;
+      for (const b of bucketsOf(byProd[p.id] || [])) if (b.qty > 0) rows.push({ product: p, project: proj[p.projectId], ...b });
+    }
+    return { rows, projects };
   }
 
   // ---------- people (1.6) ----------
@@ -342,7 +475,7 @@ const DB = (() => {
 
   async function saveProduct(data) {
     const db = await open();
-    const tx = db.transaction(['projects', 'products', 'movements'], 'readwrite');
+    const tx = db.transaction(['projects', 'products', 'movements', 'meta'], 'readwrite');
     const s = tx.objectStore('products');
     let rec;
     if (data.id) {
@@ -375,6 +508,8 @@ const DB = (() => {
         const prs = tx.objectStore('projects');
         const project = await reqP(prs.get(rec.projectId));
         if (addNames(project, [m])) prs.put(project);
+        await pushShared(tx.objectStore('meta'), 'locations', [m.location]);
+        await pushShared(tx.objectStore('meta'), 'owners', [m.owner]);
       }
     }
     await done(tx);
@@ -518,8 +653,7 @@ const DB = (() => {
     const db = await open();
     const tx = db.transaction([...DATA_STORES, 'meta']);
     const [projects, products, movements] = await Promise.all(DATA_STORES.map(n => reqP(tx.objectStore(n).getAll())));
-    const people = (await reqP(tx.objectStore('meta').get('people'))) || [];
-    return { projects, products, movements, people };
+    return { projects, products, movements, ...await metaLists(tx.objectStore('meta')) };
   }
 
   /** Replaces everything with `data` in one transaction (all or nothing). What was there
@@ -528,19 +662,31 @@ const DB = (() => {
    *  undo: true puts the safety copy back instead and then removes it.
    *  reason is saved with the safety copy ('restore', or 'deleteAll' for Delete all data).
    *  data.people (1.6) replaces the People list when given; older backups have none, so
-   *  the list is kept and any names on the restored entries are added to it. */
+   *  the list is kept and any names on the restored entries are added to it.
+   *  data.locations / owners (1.10) replace the app-wide lists; older backups have none,
+   *  so they are made from the restored projects' lists. data.locPhotos (1.10) replaces
+   *  the location photos; older backups have none, so the photos on the phone are kept. */
   async function replaceAll(data, { undo = false, reason = 'restore' } = {}) {
     const sums = {};
     for (const m of data.movements) sums[m.productId] = (sums[m.productId] || 0) + (m.delta || 0);
     const db = await open();
     const tx = db.transaction([...DATA_STORES, 'meta'], 'readwrite');
     const [projects, products, movements] = await Promise.all(DATA_STORES.map(n => reqP(tx.objectStore(n).getAll())));
-    const people = (await reqP(tx.objectStore('meta').get('people'))) || [];
-    if (undo) tx.objectStore('meta').delete('beforeRestore');
-    else tx.objectStore('meta').put({ savedAt: now(), reason, data: { projects, products, movements, people } }, 'beforeRestore');
+    const meta = tx.objectStore('meta');
+    const cur = await metaLists(meta);
+    const people = cur.people;
+    if (undo) meta.delete('beforeRestore');
+    else meta.put({ savedAt: now(), reason, data: { projects, products, movements, ...cur } }, 'beforeRestore');
     const nextPeople = (Array.isArray(data.people) ? data.people : people).slice();
     for (const m of data.movements) { const n = tidy(m.person); if (n && !nextPeople.includes(n)) nextPeople.push(n); }
-    tx.objectStore('meta').put(nextPeople.sort(nameSort), 'people');
+    meta.put(nextPeople.sort(nameSort), 'people');
+    const derived = sharedFrom(data.projects);
+    for (const k of KINDS) {
+      const list = (Array.isArray(data[k]) ? data[k] : derived[k]).map(tidy).filter(Boolean);
+      for (const n of derived[k]) if (!list.includes(n)) list.push(n);
+      meta.put(uniq(list).sort(nameSort), k);
+    }
+    meta.put(data.locPhotos && typeof data.locPhotos === 'object' ? data.locPhotos : cur.locPhotos, 'locPhotos');
     for (const n of DATA_STORES) tx.objectStore(n).clear();
     for (const p of data.projects) tx.objectStore('projects').put(p);
     for (const p of data.products) tx.objectStore('products').put({ ...p, stock: sums[p.id] || 0 });
@@ -550,7 +696,8 @@ const DB = (() => {
 
   /** Erases every project, product, photo and entry (settings in localStorage stay).
    *  A safety copy is kept first, like a restore, so it can be undone. */
-  const deleteAll = () => replaceAll({ projects: [], products: [], movements: [] }, { reason: 'deleteAll' }); // People list stays
+  // The Team Member list stays; storage locations, product owners and their photos go.
+  const deleteAll = () => replaceAll({ projects: [], products: [], movements: [], locations: [], owners: [], locPhotos: {} }, { reason: 'deleteAll' });
 
   /** The safety copy from before the last restore or delete, or undefined. */
   const beforeRestore = () => get('meta', 'beforeRestore');
@@ -566,7 +713,8 @@ const DB = (() => {
     open, listProjects, getProject, saveProject, deleteProject, deleteProjects, deleteProducts, deleteAll,
     listProducts, getProduct, saveProduct, deleteProduct,
     listMovements, addMovement, setCount, updateMovement, updateMovementNote, deleteMovement, recentNotes, persist,
-    bucketsOf, isLow, setLowStock, addName, renameName, removeName,
+    bucketsOf, isLow, setLowStock, listNames, addName, renameName, removeName, setProjectNames, stockRows,
+    listLocPhotos, addLocPhoto, renameLocPhoto, removeLocPhoto,
     listPeople, addPerson, renamePerson, removePerson,
     exportAll, replaceAll, beforeRestore,
   };

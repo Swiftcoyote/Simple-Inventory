@@ -26,8 +26,13 @@ A phone-first inventory tracker that works offline and installs to your home scr
   (stock adjusts; the old values are kept in the entry's `edits`) or to delete it (stock is reversed).
 - **Correct stock count** (⋮ menu on a product) sets the count at one location + owner and records the difference as a "count" entry.
 - **Locations and owners**: stock is counted per location + owner, with a product total.
-  Add asks for both, Remove asks where from, **Move** shifts stock between them. Each project
-  keeps its own lists (⋮ › Locations and owners to rename/remove). Pre-1.3 stock shows as "Not set".
+  Add asks for both, Remove asks where from, **Move** shifts stock between them. Since 1.10 there is
+  one app-wide list of each (Lists tab, `meta` 'locations' / 'owners'); each project keeps the names it
+  uses (`project.locations` / `owners`), shown first under "This project". Pre-1.3 stock shows as "Not set".
+- **Lists tab** (1.10): swipeable Storage Locations / Product Owners / Team Members. A location or owner
+  opens a page with what's stored/owned there in every project, ⋮ Rename/Remove (renames every project
+  and History). Locations have any number of named photos (`meta` 'locPhotos', in backups).
+  New project can pick its product owners; a project with one owner preselects it on new stock.
 - **Low-stock warning**: optional number per product; at or below it the product is flagged
   "Low", the project shows a low count, and "Low stock only" filters the list.
 
@@ -38,7 +43,7 @@ A phone-first inventory tracker that works offline and installs to your home scr
   A reminder shows on the home screen after 7 days without a backup (can be turned off).
 
 - **Who (people)**: Add, Remove, Move and Correct count ask who is doing it, from one app-wide
-  list (Settings › People, or "+ New person…" on the form). Saved on each entry as `person`.
+  list (Lists › Team Members, or "+ New person…" on the form). Saved on each entry as `person`.
 - **Reports** (Reports tab, or project ⋮ for that project): pick a project or all and a date range
   (quick picks or custom), optionally one location, owner, person or product. Shows totals,
   then start/added/used/end per product, location and owner, added/used per person and per note,
