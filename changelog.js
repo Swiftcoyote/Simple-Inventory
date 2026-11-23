@@ -4,6 +4,22 @@
  * to match (e.g. '1.1-build2'). Builds count up and never reset. */
 window.CHANGELOG = [
   {
+    version: '1.11', build: 13, date: '2026-11-23',
+    title: 'Clearer product pages and more photos',
+    changes: [
+      'Products can now have more than one photo, for example the item and its label. Open the product, tap ⋮ › Edit product and photos, then tap + Add. Tap a photo to make it the main photo (the one shown in lists) or to remove it.',
+      'On the product pages, swipe the photos left and right. Tap a photo to see it full size.',
+      'New Inventory product page. Tap Inventory, then a product. It shows the photos, the part number, the total in stock, and Where it is: a card for each project with its storage locations, product owners and how many are at each. Tap a project card to open the product in that project.',
+      'The By storage location and By product owner lists at the bottom of the Inventory product page are gone. The project cards show the same thing more clearly.',
+      'Remove, Move and Add are now on the Inventory product page too. The form starts with Project, then Storage Location and Product Owner. Adding to a project that doesn\'t have the product yet adds the product to that project.',
+      'Recent activity on the Inventory product page shows the last 5 adds, removes and moves in every project. Tap See all in Reports for the whole History of that product.',
+      'The product page inside a project shows In stock in this project with a table of Storage Location, Product Owner and Qty, then Remove, Move and Add, then the History. If the product is in other projects too, a line shows the total in all projects.',
+      'Reports has a new Stock on hand section: each product with its projects, storage locations, product owners and quantities at the end of the dates you picked. It is also in the PDF and the spreadsheet.',
+      'Reports for All projects: the Product filter now picks a part number across every project.',
+      'Backups now include every product photo.',
+    ],
+  },
+  {
     version: '1.10', build: 12, date: '2026-11-23',
     title: 'Lists tab moved',
     changes: [

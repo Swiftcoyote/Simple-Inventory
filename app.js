@@ -78,9 +78,9 @@
   function hideToast() { clearTimeout(toastTimer); $toast.hidden = true; }
 
   // ---------- bottom sheet ----------
-  function sheet(innerHtml, onMount) {
+  function sheet(innerHtml, onMount, { still = false } = {}) {
     hideToast();
-    const node = h(`<div class="backdrop"><div class="sheet" role="dialog" aria-modal="true"><div class="grab"></div>${innerHtml}</div></div>`);
+    const node = h(`<div class="backdrop ${still ? 'still' : ''}"><div class="sheet" role="dialog" aria-modal="true"><div class="grab"></div>${innerHtml}</div></div>`);
     const back = node.firstElementChild;
     const close = () => back.remove();
     back.addEventListener('click', (e) => { if (e.target === back) close(); });
@@ -253,14 +253,42 @@
     return { at: dateAt(date, entry ? new Date(entry.at) : new Date()), dateOnly: true };
   }
 
+  // Project choice (1.11): Add, Move and Remove from the Inventory tab ask for the project too.
+  // choices = [{ product, project }]; for Add, a project that doesn't have the product yet
+  // has a stub product (no id) that is created when the stock is saved.
+  const projChoiceHtml = (choices, product) => !choices ? '' : `<label class="field"><span>Project</span>
+    <select class="input" name="proj">${choices.map((c, i) => `<option value="${i}" ${c.product === product ? 'selected' : ''}>${esc(c.project.name)} ${c.product.id ? `(${c.product.stock} in stock)` : '(new in this project)'}</option>`).join('')}</select></label>`;
+  /** What the person already filled in, so switching project keeps it. */
+  const formVals = (f) => Object.fromEntries(['date', 'who', 'whoNew', 'qty', 'note', 'lowStockAt'].filter(k => f.elements[k]).map(k => [k, f.elements[k].value]));
+  function applyVals(f, v) {
+    if (!v) return;
+    for (const [k, val] of Object.entries(v)) {
+      const e = f.elements[k];
+      if (!e || (k === 'lowStockAt')) continue;
+      if (e.tagName === 'SELECT' && ![...e.options].some(o => o.value === val)) continue;
+      e.value = val;
+    }
+    if (f.elements.whoNew) f.elements.whoNew.hidden = f.elements.who.value !== '__new';
+  }
+  /** Re-opens the same form for another project when the Project dropdown changes. */
+  function wireProjChoice(f, choices, close, resolve, reopen) {
+    if (!f.elements.proj) return;
+    f.elements.proj.onchange = async () => {
+      const c = choices[+f.elements.proj.value];
+      const keep = formVals(f);
+      resolve(await reopen(c.product, { choices, keep, still: true }));
+    };
+  }
+
   /** Add stock, remove stock, or edit an existing entry: date, place, quantity, optional note.
    *  dir is 'in' or 'out'. Pass `entry` to edit it. Resolves with
    *  { delta, at, dateOnly, note, location, owner } or null if cancelled. */
-  async function movementSheet(product, dir, entry = null) {
+  async function movementSheet(product, dir, entry = null, opts = {}) {
     const isOut = dir === 'out';
     const isCount = entry?.kind === 'count';
+    const { choices, keep, still } = opts;
     const [notes, project, moves, people] = await Promise.all([
-      DB.recentNotes(product.projectId).catch(() => []), DB.getProject(product.projectId), DB.listMovements(product.id), DB.listPeople(),
+      DB.recentNotes(product.projectId).catch(() => []), DB.getProject(product.projectId), product.id ? DB.listMovements(product.id) : [], DB.listPeople(),
     ]);
     const today = toDateInput();
     const base = bucketsWithout(moves, entry);        // stock per place without this entry
@@ -282,6 +310,7 @@
       sheet(`<h3>${title}</h3>
         <p class="desc" style="margin-top:-8px">${esc(productName(product))}</p>
         <form class="move-form">
+          ${projChoiceHtml(choices, product)}
           ${dateHtml(startDate, today)}
           ${personHtml(people, entry)}
           ${isOut ? fromHtml(sources, startFrom)
@@ -326,10 +355,12 @@
               hint.classList.toggle('low-txt', on);
             }
           };
+          applyVals(f, keep);
           const qty = wireCommon(el, f, notes, draw);
           wirePicks(el, draw);
           if (f.elements.from) f.elements.from.onchange = draw;
           if (f.elements.lowStockAt) f.elements.lowStockAt.oninput = draw;
+          wireProjChoice(f, choices, close, resolve, (p, o) => movementSheet(p, dir, null, o));
           draw();
           el.querySelector('[data-a=no]').onclick = () => { close(); resolve(null); };
           f.onsubmit = (e) => {
@@ -358,14 +389,15 @@
             if (!isOut) lastPlace.set(product.projectId, pl);
             if (!entry) lastPerson.set(person);
             close();
-            resolve({ delta: isOut ? -n : n, ...d, note: f.elements.note.value, ...pl, person, lowStockAt });
+            resolve({ delta: isOut ? -n : n, ...d, note: f.elements.note.value, ...pl, person, lowStockAt, product });
           };
-        });
+        }, { still });
     });
   }
 
   /** Move stock from one place to another (or edit a move). Total stock is unchanged. */
-  async function moveSheet(product, entry = null) {
+  async function moveSheet(product, entry = null, opts = {}) {
+    const { choices, keep, still } = opts;
     const [notes, project, moves, people] = await Promise.all([
       DB.recentNotes(product.projectId).catch(() => []), DB.getProject(product.projectId), DB.listMovements(product.id), DB.listPeople(),
     ]);
@@ -380,6 +412,7 @@
       sheet(`<h3>${entry ? 'Edit move' : 'Move stock'}</h3>
         <p class="desc" style="margin-top:-8px">${esc(productName(product))}</p>
         <form class="move-form">
+          ${projChoiceHtml(choices, product)}
           ${dateHtml(startDate, today)}
           ${personHtml(people, entry)}
           ${fromHtml(sources, startFrom)}
@@ -419,8 +452,10 @@
             }
             draw();
           };
+          applyVals(f, keep);
           const qty = wireCommon(el, f, notes, draw);
           wirePicks(el, draw);
+          wireProjChoice(f, choices, close, resolve, (p, o) => moveSheet(p, null, o));
           if (startFrom == null && sources.length === 1) f.elements.from.onchange();
           draw();
           el.querySelector('[data-a=no]').onclick = () => { close(); resolve(null); };
@@ -440,9 +475,9 @@
             if (!d) return;
             if (!entry) lastPerson.set(person);
             close();
-            resolve({ kind: 'move', qty: n, ...d, note: f.elements.note.value, location: fr.location, owner: fr.owner, toLocation: l, toOwner: o, person });
+            resolve({ kind: 'move', qty: n, ...d, note: f.elements.note.value, location: fr.location, owner: fr.owner, toLocation: l, toOwner: o, person, product });
           };
-        });
+        }, { still });
     });
   }
 
@@ -563,6 +598,8 @@
   }
 
   // ---------- photo ----------
+  /** A product's photos, main photo first (1.11: `photo` + `morePhotos`). */
+  const productPhotos = (p) => [p.photo, ...(p.morePhotos || [])].filter(Boolean);
   async function shrinkPhoto(file, max = 1280) {
     const url = URL.createObjectURL(file);
     try {
@@ -685,7 +722,7 @@
     if (!project) return notFound();
     setChrome({ title: existing ? 'Edit product' : 'New product', back: existing ? `#/i/${productId}` : `#/p/${projectId}` });
 
-    let photo = existing?.photo;        // Blob | null | undefined
+    const photos = productPhotos(existing || {});   // main photo first
     const last = lastPlace.get(projectId);
     const startLoc = (project.locations || []).includes(last.location) ? last.location : null;
     const startOwner = (project.owners || []).includes(last.owner) ? last.owner : soleOwner(project);
@@ -694,10 +731,11 @@
         <div>${ICON.camera}<div>Tap to take a photo</div></div>
         <input type="file" accept="image/*" capture="environment" aria-label="Take photo">
       </label>
-      <div class="photo-actions" id="photoActions" hidden>
+      <div class="photo-actions" id="photoActions">
         <button type="button" class="link-btn" id="fromLib">Choose from library</button>
-        <button type="button" class="link-btn" id="rmPhoto" style="color:var(--out)">Remove photo</button>
       </div>
+      <div class="ptiles" id="ptiles" hidden></div>
+      <input type="file" accept="image/*" id="camInput" capture="environment" hidden>
       <input type="file" accept="image/*" id="libInput" hidden>
       <label class="field"><span>Model / part number</span>
         <input class="input" name="partNumber" value="${esc(existing?.partNumber)}" placeholder="e.g. 3M-2097" autocapitalize="characters" spellcheck="false" enterkeyhint="next">
@@ -727,26 +765,42 @@
     </form>`);
 
     const form = frag.querySelector('form');
+    // Photos (1.11): any number; the first is the main photo (shown in lists and at the top).
     const pick = frag.getElementById('pick');
     const actions = frag.getElementById('photoActions');
-    const rmBtn = frag.getElementById('rmPhoto');
+    const tiles = frag.getElementById('ptiles');
+    const cam = frag.getElementById('camInput'), lib = frag.getElementById('libInput');
     const showPhoto = () => {
-      pick.querySelector('img')?.remove();
-      if (photo) { const img = document.createElement('img'); img.alt = ''; img.src = blobUrl(photo); pick.prepend(img); }
-      actions.hidden = false;
-      rmBtn.hidden = !photo;
+      const has = photos.length > 0;
+      pick.hidden = has; actions.hidden = has; tiles.hidden = !has;
+      if (!has) { tiles.replaceChildren(); return; }
+      tiles.innerHTML = `<div class="pt-main"><img alt="" src="${blobUrl(photos[0])}"><span class="pt-badge">★ Main photo</span></div>
+        <div class="pt-row">${photos.map((b, i) => `<button type="button" class="pt ${i ? '' : 'on'}" data-i="${i}" aria-label="Photo ${i + 1}${i ? '' : ', main photo'}">
+          <img alt="" src="${blobUrl(b)}">${i ? '' : '<span>★</span>'}</button>`).join('')}
+          <button type="button" class="pt add" data-a="add" aria-label="Add photo">${ICON.plus}<small>Add</small></button></div>
+        <p class="hint" style="margin:6px 0 12px">Tap a photo to make it the main photo or remove it. The main photo shows in lists.</p>`;
+      tiles.querySelector('[data-a=add]').onclick = () => menuSheet('Add photo', [
+        { label: 'Take photo', run: () => cam.click() },
+        { label: 'Choose from library', run: () => lib.click() },
+      ]);
+      tiles.querySelectorAll('.pt[data-i]').forEach(t => t.onclick = () => {
+        const i = +t.dataset.i;
+        menuSheet(i ? `Photo ${i + 1}` : 'Main photo', [
+          ...(i ? [{ label: '★ Make main photo', run: () => { photos.unshift(...photos.splice(i, 1)); showPhoto(); } }] : []),
+          { label: 'Remove photo', danger: true, run: () => { photos.splice(i, 1); showPhoto(); } },
+        ]);
+      });
     };
     const onFile = async (input) => {
       const f = input.files?.[0];
       if (!f) return;
-      try { photo = await shrinkPhoto(f); showPhoto(); } catch { toast('Could not read that photo'); }
+      try { photos.push(await shrinkPhoto(f)); showPhoto(); } catch { toast('Could not read that photo'); }
       input.value = '';
     };
     pick.querySelector('input').onchange = (e) => onFile(e.target);
-    const lib = frag.getElementById('libInput');
+    cam.onchange = () => onFile(cam);
     lib.onchange = () => onFile(lib);
     frag.getElementById('fromLib').onclick = () => lib.click();
-    rmBtn.onclick = () => { photo = null; showPhoto(); };
     showPhoto();
 
     // Starting stock needs a location and owner; those fields show once the quantity is above 0.
@@ -779,7 +833,7 @@
         lastPerson.set(person);
       }
       const rec = await DB.saveProduct({
-        id: existing?.id, projectId, partNumber, description, photo: photo ?? null,
+        id: existing?.id, projectId, partNumber, description, photo: photos[0] || null, morePhotos: photos.slice(1),
         initialStock, location, owner, person, lowStockAt,
       });
       toast(existing ? 'Saved' : 'Product added');
@@ -788,14 +842,101 @@
     return frag;
   }
 
+  // ---------- product pages (1.11) ----------
+  // Both product pages share: a swipeable photo strip (main photo first), a stock card with a
+  // Storage Location / Product Owner / Qty table, and Remove · Move · Add buttons.
+  const ICO_PIN = '<svg class="ti" viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M12 21s-7-6.2-7-11.5a7 7 0 0 1 14 0C19 14.8 12 21 12 21z"/><circle cx="12" cy="9.5" r="2.5"/></svg>';
+  const ICO_USER = '<svg class="ti" viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><circle cx="12" cy="8" r="4"/><path d="M4 21c1-4 4.5-6 8-6s7 2 8 6"/></svg>';
+  const sortPlaces = (list) => list.slice().sort((a, b) => (a.location === '') - (b.location === '') || natCmp(a.location, b.location) || natCmp(a.owner, b.owner));
+  /** Storage Location | Product Owner | Qty, one row per place that holds stock. */
+  const placeTableHtml = (places) => `<table class="ptable">
+    <thead><tr><th>Storage Location</th><th>Product Owner</th><th class="n">Qty</th></tr></thead>
+    <tbody>${sortPlaces(places).map(b => `<tr><td>${ICO_PIN}${nameHtml(b.location)}</td><td>${ICO_USER}${nameHtml(b.owner)}</td><td class="n">${b.qty}</td></tr>`).join('')}</tbody></table>`;
+
+  function galleryHtml(photos) {
+    if (!photos.length) return `<div class="hero">${ICON.camera}</div>`;
+    const many = photos.length > 1;
+    return `<div class="gallery ${many ? 'multi' : ''}">${photos.map((b, i) => `<button type="button" class="g-ph" data-i="${i}" aria-label="${i ? `Photo ${i + 1}` : 'Main photo'}, tap to see full size">
+        <img alt="" src="${blobUrl(b)}">${many && !i ? '<span class="g-main">★ Main</span>' : ''}</button>`).join('')}</div>
+      ${many ? `<div class="g-dots" aria-hidden="true">${photos.map((_, i) => `<i class="${i ? '' : 'on'}"></i>`).join('')}</div>` : ''}`;
+  }
+  function wireGallery(frag, photos) {
+    const g = frag.querySelector('.gallery');
+    if (!g) return;
+    g.querySelectorAll('.g-ph').forEach(b => b.onclick = () =>
+      photoViewer(photos.map((photo, i) => ({ photo, label: i ? `Photo ${i + 1}` : 'Main photo' })), +b.dataset.i));
+    const dots = frag.querySelectorAll('.g-dots i');
+    if (dots.length) g.addEventListener('scroll', () => {
+      const w = g.firstElementChild.offsetWidth + 8;
+      const i = Math.min(dots.length - 1, Math.round(g.scrollLeft / w));
+      dots.forEach((d, k) => d.classList.toggle('on', k === i));
+    }, { passive: true });
+  }
+
+  /** Add / Remove / Move, then a toast with Undo. choices (Inventory tab) adds a Project
+   *  dropdown; picking a project that doesn't have the product yet creates it there. */
+  async function stockAction(dir, product, choices = null) {
+    const r = dir === 'move' ? await moveSheet(product, null, { choices }) : await movementSheet(product, dir, null, { choices });
+    if (!r) return;
+    const { lowStockAt, product: target, ...entry } = r;
+    if (choices) ss.set('invLastProj', target.projectId);
+    let pid = target.id, created = false, res;
+    try {
+      if (!pid) {
+        const rec = await DB.saveProduct({ projectId: target.projectId, partNumber: target.partNumber, description: target.description,
+          photo: target.photo || null, morePhotos: target.morePhotos || [], lowStockAt: lowStockAt ?? null, initialStock: 0 });
+        pid = rec.id; created = true;
+      }
+      res = await DB.addMovement({ productId: pid, ...entry });
+      if (lowStockAt !== undefined && !created) res.product = await DB.setLowStock(pid, lowStockAt);
+    } catch (err) {
+      toast(err.code === 'NEGATIVE' ? `Can't save: ${err.message}` : 'Could not save');
+      if (created) await DB.deleteProduct(pid).catch(() => {});
+      render(); return;
+    }
+    const { product: after, movement } = res;
+    render();
+    if (!movement) return;
+    const pName = choices ? choices.find(c => c.product === target)?.project.name : null;
+    const there = pName ? ` there` : ' in stock';
+    const msg = r.kind === 'move' ? `Moved ${r.qty} to ${placeLabel(r.toLocation, r.toOwner)}${pName ? ` in ${pName}` : ''}`
+      : `${r.delta > 0 ? 'Added' : 'Removed'} ${Math.abs(r.delta)}${pName ? ` ${r.delta > 0 ? 'to' : 'from'} ${pName}` : ''} · ${after.stock}${there}`;
+    const lowNote = lowStockAt !== undefined ? (lowStockAt == null ? ' · Warning off' : ` · Warns at ${lowStockAt}`) : '';
+    toast(msg + lowNote + (DB.isLow(after) && r.delta < 0 ? ' · Low stock' : ''), [
+      { label: 'Undo', run: async () => {
+        await DB.deleteMovement(movement.id);
+        if (created) await DB.deleteProduct(pid);
+        toast('Undone'); render();
+      } },
+    ]);
+  }
+  const actionsHtml = (canTake) => `<div class="move-actions three">
+      <button class="btn out" data-act="out" ${canTake ? '' : 'disabled'}>− Remove</button>
+      <button class="btn" data-act="move" ${canTake ? '' : 'disabled'}>⇄ Move</button>
+      <button class="btn in" data-act="in">+ Add</button>
+    </div>`;
+  const histItemHtml = (m, extra = '') => `
+        <div class="d ${m.kind === 'move' ? 'mv' : m.delta > 0 ? 'in' : 'out'}">${m.kind === 'move' ? `⇄${m.qty}` : signed(m.delta)}</div>
+        <div class="grow" style="flex:1;min-width:0">
+          <div class="what">${moveLabel(m)} ${m.kind === 'move' ? m.qty : Math.abs(m.delta)}${m.editedAt ? ' <span class="tag">edited</span>' : ''}${extra}</div>
+          <div class="when">${esc(fmtWhen(m.at, m.dateOnly))}</div>
+          <div class="where">${entryPlaceHtml(m)}</div>
+          ${m.person ? `<div class="who">By ${esc(m.person)}</div>` : ''}
+          ${m.note ? `<div class="note">${esc(m.note)}</div>` : ''}
+        </div>`;
+
+  /** A product inside one project: its stock there, where it is, and its History. */
   async function viewProduct(id) {
     const p = await DB.getProduct(id);
     if (!p) return notFound();
-    const [project, moves] = await Promise.all([DB.getProject(p.projectId), DB.listMovements(id)]);
+    const [project, moves, { items }] = await Promise.all([DB.getProject(p.projectId), DB.listMovements(id), inventoryItems()]);
+    const item = items.find(i => i.key === invKey(p));
+    const others = item ? item.rows.length - 1 : 0;
     setChrome({
       title: project?.name || 'Product', back: `#/p/${p.projectId}`,
       menu: () => menuSheet(productName(p), [
-        { label: 'Edit product', run: () => go(`#/i/${id}/edit`) },
+        { label: 'Edit product and photos', run: () => go(`#/i/${id}/edit`) },
+        ...(item ? [{ label: 'See in all projects', run: () => go(`#/inventory/${encodeURIComponent(item.key)}`, true) }] : []),
         { label: 'Correct stock count', run: async () => {
           const r = await countSheet(p);
           if (!r) return;
@@ -818,64 +959,33 @@
     const rows = moves.map(m => { const after = bal; bal -= m.delta; return { m, before: bal, after }; });
     const places = DB.bucketsOf(moves).filter(b => b.qty !== 0);
     const low = DB.isLow(p);
+    const photos = productPhotos(p);
 
     const frag = h(`<div>
-      ${p.photo ? `<img class="hero" alt="" src="${blobUrl(p.photo)}">` : `<div class="hero">${ICON.camera}</div>`}
+      ${galleryHtml(photos)}
       <div class="pn">${esc(p.partNumber || '—')}</div>
       ${p.description ? `<p class="desc">${esc(p.description)}</p>` : ''}
       <div class="card stockbox-wrap ${low ? 'is-low' : ''}">
         <div class="stockbox">
-          <div><div class="lbl">Total in stock</div>
-            ${p.lowStockAt != null ? `<div class="low-line ${low ? 'on' : ''}">${low ? 'Low stock · ' : ''}warns at ${p.lowStockAt} or less</div>` : ''}</div>
+          <div><div class="lbl strong">In stock in this project${low ? ' <span class="tag low">Low</span>' : ''}</div>
+            <div class="low-line ${low ? 'on' : ''}">${esc(project?.name || '')}${p.lowStockAt != null ? ` · warns at ${p.lowStockAt} or less` : ''}</div></div>
           <div class="big ${p.stock ? '' : 'zero'} ${low ? 'low' : ''}">${p.stock}</div>
         </div>
-        ${places.length ? `<ul class="places">${places.map(b => `
-          <li><span class="pl">${placeHtml(b.location, b.owner)}</span><b>${b.qty}</b></li>`).join('')}</ul>` : ''}
+        ${places.length ? placeTableHtml(places) : `<div class="ptable-empty">None in stock here.</div>`}
       </div>
-      <div class="move-actions three">
-        <button class="btn out" id="rm" ${p.stock ? '' : 'disabled'}>− Remove</button>
-        <button class="btn" id="mv" ${p.stock ? '' : 'disabled'}>⇄ Move</button>
-        <button class="btn in" id="add">+ Add</button>
-      </div>
+      ${actionsHtml(p.stock > 0)}
+      ${others > 0 ? `<a class="card row all-link" href="#/inventory/${encodeURIComponent(item.key)}">
+        <div class="grow"><div class="t">In all projects: ${item.total}</div><div class="s">Also in ${plural(others, 'other project')}</div></div>${ICON.chev}</a>` : ''}
       <h2 class="section">History</h2>
       ${rows.length ? `<ul class="card hist">${rows.map(({ m, before, after }) => `
-        <li data-id="${m.id}">
-          <div class="d ${m.kind === 'move' ? 'mv' : m.delta > 0 ? 'in' : 'out'}">${m.kind === 'move' ? `⇄${m.qty}` : signed(m.delta)}</div>
-          <div class="grow" style="flex:1;min-width:0">
-            <div class="what">${moveLabel(m)} ${m.kind === 'move' ? m.qty : Math.abs(m.delta)}${m.editedAt ? ' <span class="tag">edited</span>' : ''}</div>
-            <div class="when">${esc(fmtWhen(m.at, m.dateOnly))}</div>
-            <div class="where">${entryPlaceHtml(m)}</div>
-            ${m.person ? `<div class="who">By ${esc(m.person)}</div>` : ''}
-            ${m.note ? `<div class="note">${esc(m.note)}</div>` : ''}
-          </div>
+        <li data-id="${m.id}">${histItemHtml(m)}
           <div class="bal" aria-label="Stock before and after">${before} → <b>${after}</b></div>
         </li>`).join('')}</ul>`
       : `<div class="card empty" style="padding:24px">No stock changes yet.</div>`}
     </div>`);
 
-    const doMove = async (dir) => {
-      const r = dir === 'move' ? await moveSheet(p) : await movementSheet(p, dir);
-      if (!r) return;
-      const { lowStockAt, ...entry } = r;
-      let res;
-      try {
-        res = await DB.addMovement({ productId: id, ...entry });
-        if (lowStockAt !== undefined) res.product = await DB.setLowStock(id, lowStockAt);
-      }
-      catch (err) { toast(err.code === 'NEGATIVE' ? `Can't save: ${err.message}` : 'Could not save'); render(); return; }
-      const { product, movement } = res;
-      render();
-      if (!movement) return;
-      const msg = r.kind === 'move' ? `Moved ${r.qty} to ${placeLabel(r.toLocation, r.toOwner)}`
-        : `${r.delta > 0 ? 'Added' : 'Removed'} ${Math.abs(r.delta)} · ${product.stock} in stock`;
-      const lowNote = lowStockAt !== undefined ? (lowStockAt == null ? ' · Warning off' : ` · Warns at ${lowStockAt}`) : '';
-      toast(msg + lowNote + (DB.isLow(product) && r.delta < 0 ? ' · Low stock' : ''), [
-        { label: 'Undo', run: async () => { await DB.deleteMovement(movement.id); toast('Undone'); render(); } },
-      ]);
-    };
-    frag.getElementById('rm').onclick = () => doMove('out');
-    frag.getElementById('add').onclick = () => doMove('in');
-    frag.getElementById('mv').onclick = () => doMove('move');
+    wireGallery(frag, photos);
+    frag.querySelectorAll('[data-act]').forEach(b => b.onclick = () => stockAction(b.dataset.act, p));
     frag.querySelectorAll('.hist li').forEach(li => li.onclick = () => {
       const r = rows.find(x => x.m.id === li.dataset.id);
       entrySheet(p, r.m, r.before, r.after);
@@ -902,7 +1012,7 @@
       const it = items.get(k) || { key: k, partNumber: p.partNumber || '', description: '', photo: null, rows: [] };
       if (!it.description && p.description) it.description = p.description;
       if (!it.photo && p.photo) it.photo = p.photo;
-      it.rows.push({ product: p, project: projById[p.projectId], buckets: DB.bucketsOf(movesBy[p.id] || []) });
+      it.rows.push({ product: p, project: projById[p.projectId], moves: movesBy[p.id] || [], buckets: DB.bucketsOf(movesBy[p.id] || []) });
       items.set(k, it);
     }
     for (const it of items.values()) {
@@ -910,6 +1020,15 @@
       it.total = it.rows.reduce((a, r) => a + r.product.stock, 0);
       it.low = it.rows.some(r => DB.isLow(r.product));
       it.locations = new Set(it.rows.flatMap(r => r.buckets.filter(b => b.qty).map(b => b.location)));
+      // every photo of every project's copy, the item's main photo first; copies made from
+      // the Inventory tab hold the same pictures, so same size and type counts as the same photo
+      const seen = new Set();
+      it.photos = [it.photo, ...it.rows.flatMap(r => productPhotos(r.product))].filter(b => {
+        if (!b) return false;
+        const k = `${b.size}:${b.type}`;
+        if (seen.has(k)) return false;
+        seen.add(k); return true;
+      });
     }
     return { items: [...items.values()], projects: data.projects.slice().sort((a, b) => natCmp(a.name, b.name)) };
   }
@@ -1014,49 +1133,76 @@
     return frag;
   }
 
+  /** One product across every project (1.11): photos, total, then each project with its
+   *  storage locations, product owners and quantities, and the latest activity. */
   async function viewInventoryItem(key) {
-    const { items } = await inventoryItems();
+    const [{ items }, projects] = await Promise.all([inventoryItems(), DB.listProjects()]);
     const it = items.find(i => i.key === key);
     if (!it) return notFound();
     setChrome({ title: it.partNumber || it.description || 'Product', back: '#/inventory' });
-    const byLoc = new Map(), byOwn = new Map();
-    for (const r of it.rows) for (const b of r.buckets) {
-      if (!b.qty) continue;
-      byLoc.set(b.location, (byLoc.get(b.location) || 0) + b.qty);
-      byOwn.set(b.owner, (byOwn.get(b.owner) || 0) + b.qty);
-    }
-    const sortNames = (m) => [...m].sort((a, b) => (a[0] === '') - (b[0] === '') || natCmp(a[0], b[0]));
-    const nameList = (m) => `<ul class="card places inv-places">${sortNames(m).map(([n, q]) => `<li><span class="pl">${nameHtml(n)}</span><b>${q}</b></li>`).join('')}</ul>`;
+    const nLoc = new Set(it.rows.flatMap(r => r.buckets.filter(b => b.qty).map(b => b.location))).size;
     const descs = [...new Set(it.rows.map(r => r.product.description).filter(Boolean))];
+    const low = it.rows.some(r => DB.isLow(r.product));
+    const recent = it.rows.flatMap(r => r.moves.map(m => ({ m, r })))
+      .sort((a, b) => b.m.at.localeCompare(a.m.at) || b.m.createdAt.localeCompare(a.m.createdAt));
     const frag = h(`<div>
-      ${it.photo ? `<img class="hero" alt="" src="${blobUrl(it.photo)}">` : `<div class="hero">${ICON.camera}</div>`}
+      ${galleryHtml(it.photos)}
       <div class="pn">${esc(it.partNumber || '—')}</div>
       ${descs.map(d => `<p class="desc">${esc(d)}</p>`).join('')}
-      <div class="card stockbox-wrap">
+      <div class="card stockbox-wrap ${low ? 'is-low' : ''}">
         <div class="stockbox">
-          <div><div class="lbl">Total in stock</div>
-            <div class="low-line">${plural(it.rows.length, 'project')} · ${plural(byLoc.size, 'storage location')}</div></div>
+          <div><div class="lbl strong">Total in stock${low ? ' <span class="tag low">Low</span>' : ''}</div>
+            <div class="low-line">in ${plural(it.rows.length, 'project')} · ${plural(nLoc, 'storage location')}</div></div>
           <div class="big ${it.total ? '' : 'zero'}">${it.total}</div>
         </div>
       </div>
-      <h2 class="section">Projects</h2>
-      <p class="hint inv-hint">Tap a project to add, remove or move stock there and see its History.</p>
+      ${actionsHtml(it.total > 0)}
+      <h2 class="section">Where it is</h2>
       <div class="list">${it.rows.map(({ product: p, project, buckets }) => {
-        const low = DB.isLow(p), places = buckets.filter(b => b.qty);
-        return `<a class="card inv-proj" href="#/i/${p.id}">
+        const lowP = DB.isLow(p), places = buckets.filter(b => b.qty);
+        return `<a class="card pcard" href="#/i/${p.id}">
           <div class="row">
             <div class="proj-icon">${esc((project.name.trim()[0] || '?').toUpperCase())}</div>
-            <div class="grow"><div class="t">${esc(project.name)}${low ? ' <span class="tag low">Low</span>' : ''}</div>
+            <div class="grow"><div class="t">${esc(project.name)}${lowP ? ' <span class="tag low">Low</span>' : ''}</div>
               ${p.lowStockAt != null ? `<div class="s">Warns at ${p.lowStockAt} or less</div>` : ''}</div>
-            <div class="count ${p.stock ? '' : 'zero'} ${low ? 'low' : ''}"><span class="n">${p.stock}</span><span class="l">in stock</span></div>
+            <div class="count ${p.stock ? '' : 'zero'} ${lowP ? 'low' : ''}"><span class="n">${p.stock}</span><span class="l">in stock</span></div>
             ${ICON.chev}
           </div>
-          ${places.length ? `<ul class="places">${places.map(b => `<li><span class="pl">${placeHtml(b.location, b.owner)}</span><b>${b.qty}</b></li>`).join('')}</ul>` : ''}
+          ${places.length ? placeTableHtml(places) : `<div class="ptable-empty">None in stock in this project.</div>`}
         </a>`;
       }).join('')}</div>
-      ${byLoc.size ? `<h2 class="section">By storage location</h2>${nameList(byLoc)}` : ''}
-      ${byOwn.size ? `<h2 class="section">By product owner</h2>${nameList(byOwn)}` : ''}
+      <h2 class="section">Recent activity</h2>
+      ${recent.length ? `<ul class="card hist feed">${recent.slice(0, 5).map(({ m, r }) => `
+        <li data-p="${r.product.id}">${histItemHtml(m, ` · <span class="feed-proj">${esc(r.project.name)}</span>`)}</li>`).join('')}</ul>
+        <button class="btn wide" data-a="reports">See all in Reports</button>`
+      : `<div class="card empty" style="padding:24px">No stock changes yet.</div>`}
     </div>`);
+
+    wireGallery(frag, it.photos);
+    // Add can go to any project (a project without this product gets it); Remove and Move only
+    // where there is stock.
+    const byProj = new Map(it.rows.map(r => [r.project.id, r]));
+    const lastProj = ss.get('invLastProj');
+    frag.querySelectorAll('[data-act]').forEach(b => b.onclick = () => {
+      const dir = b.dataset.act;
+      const ref = it.rows[0].product;
+      const choices = (dir === 'in' ? projects.slice().sort((x, y) => natCmp(x.name, y.name)) : it.rows.filter(r => r.product.stock > 0).map(r => r.project))
+        .map(project => ({ project, product: byProj.get(project.id)?.product || {
+          id: null, projectId: project.id, partNumber: ref.partNumber, description: ref.description,
+          photo: ref.photo || null, morePhotos: ref.morePhotos || [], stock: 0, lowStockAt: null } }));
+      if (!choices.length) return;
+      const start = choices.find(c => c.project.id === lastProj && (dir === 'in' || c.product.stock > 0))
+        || choices.find(c => c.product.id && (dir === 'in' || c.product.stock > 0)) || choices[0];
+      stockAction(dir, start.product, choices);
+    });
+    frag.querySelectorAll('.feed li').forEach(li => li.onclick = () => go(`#/i/${li.dataset.p}`));
+    const rep = frag.querySelector('[data-a=reports]');
+    if (rep) rep.onclick = () => {
+      const first = recent[recent.length - 1].m;
+      Object.assign(repState, { proj: '', prod: it.key, loc: ALL, own: ALL, who: ALL, period: 'custom',
+        from: toDateInput(new Date(first.at)), to: toDateInput() });
+      saveRep(); go('#/reports', true);
+    };
     return frag;
   }
 
@@ -1265,7 +1411,7 @@
   }
 
   /** Full-screen photos: swipe or tap the arrows to go through them. */
-  function photoViewer(photos, start, { rename, remove }) {
+  function photoViewer(photos, start, { rename, remove } = {}) {
     hideToast();
     let i = start;
     const node = h(`<div class="viewer" role="dialog" aria-modal="true" aria-label="Photo">
@@ -1273,7 +1419,7 @@
       <div class="viewer-img"><img alt=""></div>
       <button class="viewer-nav prev" aria-label="Previous photo">‹</button><button class="viewer-nav next" aria-label="Next photo">›</button>
       <div class="viewer-bar"><span class="viewer-n"></span>
-        <button class="link-btn" data-a="ren">Rename</button><button class="link-btn danger" data-a="rm">Delete</button></div>
+        ${rename ? '<button class="link-btn" data-a="ren">Rename</button>' : ''}${remove ? '<button class="link-btn danger" data-a="rm">Delete</button>' : ''}</div>
     </div>`);
     const el = node.firstElementChild;
     const src = photos.map(p => URL.createObjectURL(p.photo));
@@ -1290,8 +1436,8 @@
     el.querySelector('.prev').onclick = () => step(-1);
     el.querySelector('.next').onclick = () => step(1);
     el.querySelector('[data-a=close]').onclick = close;
-    el.querySelector('[data-a=ren]').onclick = () => { const p = photos[i]; close(); rename(p); };
-    el.querySelector('[data-a=rm]').onclick = () => { const p = photos[i]; close(); remove(p); };
+    if (rename) el.querySelector('[data-a=ren]').onclick = () => { const p = photos[i]; close(); rename(p); };
+    if (remove) el.querySelector('[data-a=rm]').onclick = () => { const p = photos[i]; close(); remove(p); };
     let sx = null;
     el.addEventListener('touchstart', (e) => { sx = e.touches.length === 1 ? e.touches[0].clientX : null; }, { passive: true });
     el.addEventListener('touchend', (e) => {
@@ -1370,7 +1516,7 @@
   const fmtSize = (n) => n < 1024 * 1024 ? `${Math.max(1, Math.round(n / 1024))} KB` : `${(n / 1024 / 1024).toFixed(1)} MB`;
   const countsOf = (d) => ({
     projects: d.projects.length, products: d.products.length, entries: d.movements.length,
-    photos: d.products.filter(p => p.photo).length + Object.values(d.locPhotos || {}).reduce((a, l) => a + l.length, 0),
+    photos: d.products.reduce((a, p) => a + (p.photo ? 1 : 0) + (p.morePhotos || []).length, 0) + Object.values(d.locPhotos || {}).reduce((a, l) => a + l.length, 0),
   });
   const countsText = (c) => `${plural(c.projects, 'project')}, ${plural(c.products, 'product')}, ${c.entries} History ${c.entries === 1 ? 'entry' : 'entries'} and ${plural(c.photos, 'photo')}`;
   /** "3 days ago" style, for the last backup. */
@@ -1397,7 +1543,11 @@
   async function makeBackupFile() {
     const data = await DB.exportAll();
     const products = [];
-    for (const p of data.products) products.push({ ...p, photo: p.photo ? await blobToDataUrl(p.photo) : null });
+    for (const p of data.products) {
+      const more = [];
+      for (const b of p.morePhotos || []) more.push(await blobToDataUrl(b));
+      products.push({ ...p, photo: p.photo ? await blobToDataUrl(p.photo) : null, morePhotos: more });
+    }
     const locPhotos = {};
     for (const [n, list] of Object.entries(data.locPhotos || {})) {
       locPhotos[n] = [];
@@ -1485,7 +1635,8 @@
     if (!ok) throw new Error('This backup file is damaged or incomplete, so nothing was changed.');
     const data = {
       projects,
-      products: products.map(p => ({ ...p, photo: typeof p.photo === 'string' ? dataUrlToBlob(p.photo) : null })),
+      products: products.map(p => ({ ...p, photo: typeof p.photo === 'string' ? dataUrlToBlob(p.photo) : null,
+        morePhotos: (Array.isArray(p.morePhotos) ? p.morePhotos : []).filter(x => typeof x === 'string').map(dataUrlToBlob).filter(Boolean) })),
       movements,
     };
     if (Array.isArray(people)) data.people = people.filter(n => typeof n === 'string');
@@ -1650,7 +1801,7 @@
     const items = data.products.filter(p => drop.has(p.id));
     const pName = Object.fromEntries(data.projects.map(p => [p.id, p.name]));
     const entries = data.movements.filter(m => drop.has(m.productId)).length;
-    const photos = items.filter(p => p.photo).length;
+    const photos = items.reduce((a, p) => a + productPhotos(p).length, 0);
     const units = items.reduce((a, p) => a + p.stock, 0);
     const n = items.length;
     const shown = items.slice(0, 8);
@@ -1886,7 +2037,8 @@
     const pName = Object.fromEntries(projects.map(p => [p.id, p.name]));
     const allProducts = data.products.filter(p => pName[p.projectId] != null)
       .sort((a, b) => nat(pName[a.projectId], pName[b.projectId]) || nat(a.partNumber, b.partNumber) || nat(a.description, b.description));
-    const products = allProducts.filter(p => st.prod === ALL || p.id === st.prod);
+    // product filter: one product id, or (1.11, all projects) a part number across projects
+    const products = allProducts.filter(p => st.prod === ALL || p.id === st.prod || invKey(p) === st.prod);
     const pById = Object.fromEntries(products.map(p => [p.id, p]));
     const moves = data.movements.filter(m => pById[m.productId])
       .sort((a, b) => a.at.localeCompare(b.at) || a.createdAt.localeCompare(b.createdAt));
@@ -1904,6 +2056,7 @@
     const total = newAcc(), byProd = new Map(), byLoc = new Map(), byOwn = new Map(), byWho = new Map(), byNote = new Map();
     const acc = (map, k) => { if (!map.has(k)) map.set(k, newAcc()); return map.get(k); };
     const entries = [];
+    const hand = new Map();      // productId -> Map(place -> qty) at the end date (1.11)
     for (const m of moves) {
       const d = toDateInput(new Date(m.at));
       if (d > to) continue;
@@ -1911,6 +2064,9 @@
       if (!legs.length) continue;
       const inRange = d >= from && whoOk(m);
       for (const g of legs) {
+        if (!hand.has(m.productId)) hand.set(m.productId, new Map());
+        const hk = `${g.l}\u0000${g.o}`, hm = hand.get(m.productId);
+        hm.set(hk, (hm.get(hk) || 0) + g.q);
         const targets = [total, acc(byProd, m.productId), acc(byLoc, g.l), acc(byOwn, g.o)];
         for (const a of targets) { a.end += g.q; if (d < from) a.start += g.q; }
         if (!inRange) continue;
@@ -1923,7 +2079,19 @@
     // keep rows that had activity, or hold stock (unless a person filter is on)
     const keep = (a) => a.entries > 0 || (st.who === ALL && (a.start || a.end));
     const sortNames = (map) => [...map].filter(([, a]) => keep(a)).sort((x, y) => (x[0] === '') - (y[0] === '') || nat(x[0], y[0]));
+    // Stock on hand (1.11): per part number, then per project, then per place, like the product pages
+    const onHand = new Map();
+    for (const p of products) {
+      const places = [...(hand.get(p.id) || [])].filter(([, q]) => q).map(([k, qty]) => { const [location, owner] = k.split('\u0000'); return { location, owner, qty }; });
+      if (!places.length) continue;
+      const k = invKey(p);
+      if (!onHand.has(k)) onHand.set(k, { key: k, product: p, total: 0, rows: [] });
+      const o = onHand.get(k), qty = places.reduce((a, b) => a + b.qty, 0);
+      o.total += qty;
+      o.rows.push({ product: p, project: pName[p.projectId], qty, places });
+    }
     return {
+      onHand: [...onHand.values()].sort((a, b) => nat(a.product.partNumber || a.product.description, b.product.partNumber || b.product.description)),
       pName, pById, products, allProducts, lists, entries: entries.reverse(), total,
       byProd: products.filter(p => byProd.has(p.id) && keep(byProd.get(p.id))).map(p => [p, byProd.get(p.id)]),
       byLoc: sortNames(byLoc), byOwn: sortNames(byOwn),
@@ -1976,7 +2144,9 @@
     // a filter whose name no longer exists in this scope goes back to All
     let reset = false;
     for (const [k, list] of [['loc', r.lists.locations], ['own', r.lists.owners], ['who', r.lists.people]]) if (st[k] !== ALL && !list.has(st[k])) { st[k] = ALL; reset = true; }
-    if (st.prod !== ALL && !r.allProducts.some(p => p.id === st.prod)) { st.prod = ALL; reset = true; }
+    if (st.prod !== ALL && !st.proj && r.pById[st.prod]) { st.prod = invKey(r.pById[st.prod]); reset = true; }
+    if (st.prod !== ALL && st.proj && !r.pById[st.prod] && r.products.length === 1) { st.prod = r.products[0].id; reset = true; }
+    if (st.prod !== ALL && !r.allProducts.some(p => p.id === st.prod || invKey(p) === st.prod)) { st.prod = ALL; reset = true; }
     if (reset) r = await buildReport(st);
     saveRep();
 
@@ -1988,7 +2158,7 @@
     const projLabel = st.proj ? r.pName[st.proj] : 'All projects';
     const filterBits = [
       st.loc !== ALL && `Storage Location: ${st.loc || NOT_SET}`, st.own !== ALL && `Product Owner: ${st.own || NOT_SET}`,
-      st.who !== ALL && `Team Member: ${st.who || NOT_SET}`, st.prod !== ALL && `Product: ${productName(r.pById[st.prod] || {})}`,
+      st.who !== ALL && `Team Member: ${st.who || NOT_SET}`, st.prod !== ALL && `Product: ${productName(r.products[0] || {})}`,
     ].filter(Boolean);
     const showStock = st.who === ALL;
     const t = r.total;
@@ -2014,7 +2184,9 @@
           ${sel('loc', 'Storage Location', opts(r.lists.locations, st.loc), st.loc)}
           ${sel('own', 'Product Owner', opts(r.lists.owners, st.own), st.own)}
           ${sel('who', 'Team Member', opts(r.lists.people, st.who), st.who)}
-          ${sel('prod', 'Product', r.allProducts.map(p => `<option value="${esc(p.id)}" ${st.prod === p.id ? 'selected' : ''}>${esc(productName(p))}${many ? ` (${esc(r.pName[p.projectId])})` : ''}</option>`).join(''), st.prod)}
+          ${sel('prod', 'Product', many
+            ? [...new Map(r.allProducts.map(p => [invKey(p), p]))].map(([k, p]) => `<option value="${esc(k)}" ${st.prod === k ? 'selected' : ''}>${esc(productName(p))}${p.partNumber && p.description ? ` · ${esc(p.description)}` : ''}</option>`).join('')
+            : r.allProducts.map(p => `<option value="${esc(p.id)}" ${st.prod === p.id ? 'selected' : ''}>${esc(productName(p))}</option>`).join(''), st.prod)}
           ${filterBits.length ? `<button type="button" class="link-btn" data-a="clear">Clear filters</button>` : ''}
         </details>
       </form>
@@ -2049,6 +2221,15 @@
         <div class="rg-extra">${nEntries(t.entries)} · ${plural(r.byProd.length, 'product')}</div>
       </div>
       ${showStock ? '' : `<p class="hint">Start and end stock are left out while a team member is picked, because stock isn't owned by a team member.</p>`}
+
+      ${showStock && r.onHand.length ? `
+      <h2 class="section">Stock on hand</h2>
+      <p class="hint" style="margin-top:-4px">What was in stock at the end of ${esc(fmtDay(st.to))}, and where.</p>
+      <div class="list">${r.onHand.map(o => `<div class="card onhand">
+        <div class="oh-head"><div class="grow"><div class="t">${esc(productName(o.product))}</div>${o.product.partNumber && o.product.description ? `<div class="s">${esc(o.product.description)}</div>` : ''}</div>
+          <div class="count"><span class="n">${o.total}</span><span class="l">${many && o.rows.length > 1 ? 'total' : 'in stock'}</span></div></div>
+        ${o.rows.map(x => `${many ? `<div class="oh-proj"><span>${esc(x.project)}</span><b>${x.qty}</b></div>` : ''}${placeTableHtml(x.places)}`).join('')}
+      </div>`).join('')}</div>` : ''}
 
       ${t.entries || r.byProd.length ? `
       <h2 class="section">By product</h2>
@@ -2137,6 +2318,12 @@
       ...r.byWho.map(([n, a]) => row('Team Member', orName(n), '', { ...a, start: '', end: '' })),
       ...r.byNote.map(([n, a]) => row('Note', n, '', { ...a, start: '', end: '' })),
     ];
+    if (showStock && r.onHand.length) {
+      sum.push([], [`Stock on hand at the end of ${st.to}`], ['Part number', 'Description', 'Project', 'Storage Location', 'Product Owner', 'Quantity']);
+      for (const o of r.onHand) for (const x of o.rows) for (const b of sortPlaces(x.places)) {
+        sum.push([x.product.partNumber || '', x.product.description || '', x.project, orName(b.location), orName(b.owner), b.qty]);
+      }
+    }
     const ent = [['Date', 'Time', 'Project', 'Part number', 'Description', 'Type', 'Quantity', 'Storage Location', 'Product Owner', 'Moved to storage location', 'Moved to product owner', 'Team Member', 'Note', 'Edited']];
     for (const m of r.entries.slice().reverse()) {
       const p = r.pById[m.productId], d = new Date(m.at), mv = m.kind === 'move';
@@ -2259,11 +2446,11 @@
     setChrome({ title: 'Help', back: '#/settings' });
     const topics = [
       ['Getting around', 'The bar at the bottom of the screen has four tabs: <b>Projects</b> (your projects and their products), <b>Inventory</b> (every product from every project in one list), <b>Reports</b> and <b>Settings</b>. Tap a tab to switch, or swipe left or right on the Projects, Inventory, Reports or Settings screen to move to the next tab. Going back to <b>Projects</b> takes you to the project or product you had open; tap <b>Projects</b> again for the list of projects. The tabs hide while you fill in a product form.'],
-      ['Inventory (all projects)', 'The <b>Inventory</b> tab lists every product from every project, including ones with 0 in stock. Products with the same part number in different projects are shown once with the combined total. Search by part number, description or project, tap <b>Filters and sort</b> to look at one project, storage location or product owner or to change the order, or tap <b>Low stock only</b>. Tap a product to see the total, how much is in each project and where, and totals by storage location and product owner. Tap a project there to add, remove or move stock.'],
+      ['Inventory (all projects)', 'The <b>Inventory</b> tab lists every product from every project, including ones with 0 in stock. Products with the same part number in different projects are shown once with the combined total. Search by part number, description or project, or tap <b>Filters and sort</b>. Tap a product to see its photos, the total in stock and <b>Where it is</b>: a card for each project with its storage locations, product owners and how many are at each. Tap <b>+ Add</b>, <b>⇄ Move</b> or <b>− Remove</b> there and pick the project first. Tap a project card to open the product in that project with its History. <b>Recent activity</b> shows the last 5 changes; tap <b>See all in Reports</b> for the rest.'],
       ['Projects', 'Each project keeps its own inventory. On the <b>Projects</b> tab tap <b>New project</b>. Open a project and tap <b>⋮</b> to rename or delete it.'],
       ['Deleting inventory, projects or all data', 'To delete products but keep their project, tap <b>Settings</b> (bottom of the screen) › <b>Delete inventory</b>, tick the products (or <b>Select all</b> under a project) and tap <b>Delete</b>. To delete whole projects, tap <b>Delete projects</b>, tick the projects you want gone and tap <b>Delete</b>. To wipe everything, tap <b>Delete all data</b> and type <b>DELETE</b> to confirm. Both offer <b>Back up first</b>. A safety copy is kept, so if it was a mistake, tap <b>Undo</b> straight away or <b>Undo last delete</b> in Settings. Only the last restore or delete can be undone.'],
       ['Adding a product', 'Open a project and tap <b>Add product</b>. Tap the photo box to take a picture, enter the model/part number and a description, set the starting quantity, then tap <b>Add product</b>.'],
-      ['Photos', 'Tap the photo box to use the camera, or <b>Choose from library</b> for a saved picture. To change a photo later, open the product, tap <b>⋮</b> › <b>Edit product</b>.'],
+      ['Photos', 'Tap the photo box to use the camera, or <b>Choose from library</b> for a saved picture. A product can have as many photos as you like: open the product, tap <b>⋮</b> › <b>Edit product and photos</b>, then tap <b>+ Add</b>. The <b>★ main photo</b> is the one shown in lists. Tap a photo there to make it the main photo or remove it. On the product page, swipe the photos left and right and tap one to see it full size.'],
       ['Adding and removing stock', 'Tap a product to open it, then tap <b>+ Add</b> or <b>− Remove</b>. Pick the date (today is filled in), enter the quantity and, if you like, a note such as "10 for sections 15A". Add asks for the storage location and product owner. Remove asks where the stock comes from and won\'t let you take more than that spot holds. The form shows the stock there and the total after the change. Notes you used recently appear under the note box: tap one to reuse it. Right after saving, tap <b>Undo</b> at the bottom if it was a mistake.'],
       ['Storage locations and product owners', 'Stock is counted separately for each storage location (for example Bin A, Truck) and product owner. The product page shows the total and how much is at each one. In the Add form, pick a storage location and product owner, or choose <b>+ New storage location…</b> / <b>+ New product owner…</b> to type a new one. The names the project already uses show first, under <b>This project</b>. Every project shares one list of each: tap <b>Lists</b> (bottom of the screen). Tap a name there to see what is stored there (or owned), and to rename or remove it with <b>⋮</b>. Renaming updates every project and History.'],
       ['Storage location photos', 'Tap <b>Lists</b> › <b>Storage Locations</b> and tap a location. Tap <b>+ Add photo</b>, take a photo or choose one from your library, then give it a name, like Door or Shelves. Add as many as you like. Tap a photo to see it full size, swipe to see the next one, and use <b>Rename</b> or <b>Delete</b> at the bottom.'],
@@ -2389,7 +2576,7 @@
     if (document.documentElement.classList.contains('previewing')) return;
     const t = e.touches[0];
     if (t.clientX < 24 || t.clientX > window.innerWidth - 24) return;
-    if (e.target.closest('input, textarea, select, .tabbar, .toast')) return;
+    if (e.target.closest('input, textarea, select, .tabbar, .toast, .gallery')) return;
     swipe = { x: t.clientX, y: t.clientY, t: Date.now() };
   }, { passive: true });
   document.addEventListener('touchend', (e) => {
