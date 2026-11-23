@@ -690,6 +690,7 @@ const DB = (() => {
       meta.put(uniq(list).sort(nameSort), k);
     }
     meta.put(data.locPhotos && typeof data.locPhotos === 'object' ? data.locPhotos : cur.locPhotos, 'locPhotos');
+    meta.delete('formDraft');   // build 16: an unsaved form belongs to the data being replaced
     for (const n of DATA_STORES) tx.objectStore(n).clear();
     for (const p of data.projects) tx.objectStore('projects').put(p);
     for (const p of data.products) tx.objectStore('products').put({ ...p, stock: sums[p.id] || 0 });
@@ -705,6 +706,29 @@ const DB = (() => {
   /** The safety copy from before the last restore or delete, or undefined. */
   const beforeRestore = () => get('meta', 'beforeRestore');
 
+  /** The unsaved Add inventory form (build 16), kept as the user types so it survives the
+   *  browser being closed by the phone (for example while the camera app is open).
+   *  { key, route, at, fields, photos: [Blob] }, or undefined. */
+  const getDraft = () => get('meta', 'formDraft');
+  async function setDraft(d) {
+    const db = await open();
+    const tx = db.transaction('meta', 'readwrite');
+    if (d) tx.objectStore('meta').put(d, 'formDraft'); else tx.objectStore('meta').delete('formDraft');
+    await done(tx);
+  }
+  const clearDraft = () => setDraft(null);
+
+  /** How much room the app uses on this phone (build 16): { usage, quota, persisted } in bytes,
+   *  or null where the browser can't tell. */
+  async function storageInfo() {
+    try {
+      if (!navigator.storage?.estimate) return null;
+      const [{ usage, quota }, persisted] = await Promise.all([navigator.storage.estimate(),
+        navigator.storage.persisted ? navigator.storage.persisted() : Promise.resolve(false)]);
+      return { usage: usage || 0, quota: quota || 0, persisted };
+    } catch { return null; }
+  }
+
   async function persist() {
     try {
       if (navigator.storage?.persisted && await navigator.storage.persisted()) return true;
@@ -715,7 +739,7 @@ const DB = (() => {
   return {
     open, listProjects, getProject, saveProject, deleteProject, deleteProjects, deleteProducts, deleteAll,
     listProducts, getProduct, saveProduct, deleteProduct,
-    listMovements, addMovement, setCount, updateMovement, updateMovementNote, deleteMovement, recentNotes, persist,
+    listMovements, addMovement, setCount, updateMovement, updateMovementNote, deleteMovement, recentNotes, persist, getDraft, setDraft, clearDraft, storageInfo,
     bucketsOf, isLow, setLowStock, listNames, addName, renameName, removeName, setProjectNames, stockRows,
     listLocPhotos, addLocPhoto, renameLocPhoto, removeLocPhoto,
     listPeople, addPerson, renamePerson, removePerson,

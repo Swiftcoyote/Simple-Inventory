@@ -62,6 +62,7 @@
     chev: '<svg class="chev" viewBox="0 0 24 24" width="20" height="20"><path d="M9 5l7 7-7 7" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/></svg>',
     camera: '<svg viewBox="0 0 24 24" width="28" height="28" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"><path d="M4 8h3l2-3h6l2 3h3v11H4z"/><circle cx="12" cy="13" r="3.5"/></svg>',
     chart: '<svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><path d="M5 20V11M12 20V5M19 20v-6"/></svg>',
+    torch: '<svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"><path d="M13 2L5 14h6l-1 8 8-12h-6z"/></svg>',
     box: '<svg viewBox="0 0 24 24" width="24" height="24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"><path d="M3 7l9-4 9 4v10l-9 4-9-4z"/><path d="M3 7l9 4 9-4M12 11v10"/></svg>',
   };
 
@@ -598,6 +599,7 @@
   }
 
   // ---------- photo ----------
+  const DRAFT_DAYS = 3;   // an unsaved Add inventory form is kept this long (build 16)
   /** A product's photos, main photo first (1.11: `photo` + `morePhotos`). */
   const productPhotos = (p) => [p.photo, ...(p.morePhotos || [])].filter(Boolean);
   async function shrinkPhoto(file, max = 1280) {
@@ -611,6 +613,95 @@
       c.getContext('2d').drawImage(img, 0, 0, c.width, c.height);
       return await new Promise(res => c.toBlob(res, 'image/jpeg', 0.82));
     } finally { URL.revokeObjectURL(url); }
+  }
+
+  /** In-app camera (build 16). Opening the phone's Camera app sends the browser to the
+   *  background, and on phones short of memory Android closes it, so the photo is lost
+   *  ("low memory, couldn't complete previous action"). This camera runs inside the app, so
+   *  the app never leaves the screen. `fallback` is the file input for the phone camera,
+   *  used where the in-app camera can't start. Calls onBlob(blob) with the shrunk photo. */
+  function takePhoto(fallback, onBlob) {
+    if (!navigator.mediaDevices?.getUserMedia) { fallback.click(); return; }
+    hideToast();
+    const node = h(`<div class="camera" role="dialog" aria-modal="true" aria-label="Camera">
+      <div class="cam-top"><button class="icon-btn" data-a="close" aria-label="Close">✕</button>
+        <span class="cam-title">Take photo</span><button class="icon-btn cam-torch" data-a="torch" aria-label="Flashlight" hidden>${ICON.torch}</button></div>
+      <div class="cam-view"><video playsinline muted autoplay></video><img alt="" hidden>
+        <div class="cam-msg" hidden></div></div>
+      <div class="cam-bar">
+        <div class="cam-live"><button class="link-btn" data-a="phone">Use phone camera</button>
+          <button class="cam-shutter" data-a="snap" aria-label="Take photo" disabled></button><span></span></div>
+        <div class="cam-review" hidden><button class="btn" data-a="retake">Retake</button><button class="btn primary" data-a="use">Use photo</button></div>
+      </div>
+    </div>`);
+    const el = node.firstElementChild;
+    const video = el.querySelector('video'), still = el.querySelector('.cam-view img'), msg = el.querySelector('.cam-msg');
+    const snapBtn = el.querySelector('[data-a=snap]'), torchBtn = el.querySelector('[data-a=torch]');
+    let stream = null, blob = null, stillUrl = null, closed = false, torchOn = false;
+    const stop = () => { stream?.getTracks().forEach(t => t.stop()); stream = null; };
+    const close = () => {
+      closed = true; stop(); if (stillUrl) URL.revokeObjectURL(stillUrl);
+      el.remove(); document.removeEventListener('visibilitychange', onVis);
+    };
+    const fail = (text) => {
+      stop(); video.hidden = true; snapBtn.disabled = true; torchBtn.hidden = true;
+      msg.hidden = false; el.querySelector('.cam-live').hidden = true;
+      msg.innerHTML = `${esc(text)}<button class="btn primary" data-a="phone2">Use phone camera</button>`;
+      msg.querySelector('[data-a=phone2]').onclick = () => { close(); fallback.click(); };
+    };
+    const start = async () => {
+      try {
+        stream = await navigator.mediaDevices.getUserMedia({ audio: false,
+          video: { facingMode: { ideal: 'environment' }, width: { ideal: 1920 }, height: { ideal: 1440 } } });
+        if (closed) { stop(); return; }
+        video.srcObject = stream;
+        await video.play().catch(() => {});
+        snapBtn.disabled = false;
+        const track = stream.getVideoTracks()[0];
+        if (track?.getCapabilities?.().torch) torchBtn.hidden = false;
+      } catch (e) {
+        if (closed) return;
+        fail(e?.name === 'NotAllowedError'
+          ? 'The camera is blocked for this app. To allow it, tap the icon left of the web address › Permissions › Camera › Allow. Or use the phone camera for now.'
+          : "The camera couldn't start here. Use the phone camera instead.");
+      }
+    };
+    // Turning the screen off or switching apps stops the camera; it starts again on return.
+    const onVis = () => {
+      if (document.hidden) { stop(); snapBtn.disabled = true; torchOn = false; torchBtn.classList.remove('on'); }
+      else if (!blob && !closed && msg.hidden) start();
+    };
+    document.addEventListener('visibilitychange', onVis);
+
+    el.querySelector('[data-a=close]').onclick = close;
+    el.querySelector('[data-a=phone]').onclick = () => { close(); fallback.click(); };
+    torchBtn.onclick = async () => {
+      const track = stream?.getVideoTracks()[0];
+      try { await track.applyConstraints({ advanced: [{ torch: !torchOn }] }); torchOn = !torchOn; torchBtn.classList.toggle('on', torchOn); } catch {}
+    };
+    snapBtn.onclick = async () => {
+      const w = video.videoWidth, hgt = video.videoHeight;
+      if (!w || !hgt) return;
+      const scale = Math.min(1, 1280 / Math.max(w, hgt));
+      const c = document.createElement('canvas');
+      c.width = Math.round(w * scale); c.height = Math.round(hgt * scale);
+      c.getContext('2d').drawImage(video, 0, 0, c.width, c.height);
+      blob = await new Promise(res => c.toBlob(res, 'image/jpeg', 0.82));
+      if (!blob) { toast('Could not take the photo'); return; }
+      stop();
+      stillUrl = URL.createObjectURL(blob);
+      still.src = stillUrl; still.hidden = false; video.hidden = true; torchBtn.hidden = true;
+      el.querySelector('.cam-live').hidden = true; el.querySelector('.cam-review').hidden = false;
+    };
+    el.querySelector('[data-a=retake]').onclick = () => {
+      blob = null; if (stillUrl) URL.revokeObjectURL(stillUrl); stillUrl = null;
+      still.hidden = true; video.hidden = false; snapBtn.disabled = true;
+      el.querySelector('.cam-live').hidden = false; el.querySelector('.cam-review').hidden = true;
+      start();
+    };
+    el.querySelector('[data-a=use]').onclick = () => { const b = blob; close(); onBlob(b); };
+    $sheetRoot.replaceChildren(el);
+    start();
   }
 
   // ---------- chrome ----------
@@ -739,15 +830,15 @@
     };
     const { loc: startLoc, own: startOwner } = placeStart(project);
     const frag = h(`<form autocomplete="off">
+      <div class="card banner draft-note" hidden></div>
       ${fromInv ? `<label class="field"><span>Project</span>
         <select class="input" name="proj">
           ${project ? '' : '<option value="" disabled selected>Choose project…</option>'}
           ${projects.map(p => `<option value="${esc(p.id)}" ${p.id === projectId ? 'selected' : ''}>${esc(p.name)}</option>`).join('')}
         </select></label>` : ''}
-      <label class="photo-pick" id="pick">
+      <button type="button" class="photo-pick" id="pick">
         <div>${ICON.camera}<div>Tap to take a photo</div></div>
-        <input type="file" accept="image/*" capture="environment" aria-label="Take photo">
-      </label>
+      </button>
       <div class="photo-actions" id="photoActions">
         <button type="button" class="link-btn" id="fromLib">Choose from library</button>
       </div>
@@ -797,24 +888,25 @@
           <button type="button" class="pt add" data-a="add" aria-label="Add photo">${ICON.plus}<small>Add</small></button></div>
         <p class="hint" style="margin:6px 0 12px">Tap a photo to make it the main photo or remove it. The main photo shows in lists.</p>`;
       tiles.querySelector('[data-a=add]').onclick = () => menuSheet('Add photo', [
-        { label: 'Take photo', run: () => cam.click() },
+        { label: 'Take photo', run: () => takePhoto(cam, addPhoto) },
         { label: 'Choose from library', run: () => lib.click() },
       ]);
       tiles.querySelectorAll('.pt[data-i]').forEach(t => t.onclick = () => {
         const i = +t.dataset.i;
         menuSheet(i ? `Photo ${i + 1}` : 'Main photo', [
-          ...(i ? [{ label: '★ Make main photo', run: () => { photos.unshift(...photos.splice(i, 1)); showPhoto(); } }] : []),
-          { label: 'Remove photo', danger: true, run: () => { photos.splice(i, 1); showPhoto(); } },
+          ...(i ? [{ label: '★ Make main photo', run: () => { photos.unshift(...photos.splice(i, 1)); showPhoto(); saveDraft(); } }] : []),
+          { label: 'Remove photo', danger: true, run: () => { photos.splice(i, 1); showPhoto(); saveDraft(); } },
         ]);
       });
     };
+    const addPhoto = (blob) => { photos.push(blob); showPhoto(); saveDraft(); };
     const onFile = async (input) => {
       const f = input.files?.[0];
       if (!f) return;
-      try { photos.push(await shrinkPhoto(f)); showPhoto(); } catch { toast('Could not read that photo'); }
+      try { addPhoto(await shrinkPhoto(f)); } catch { toast('Could not read that photo'); }
       input.value = '';
     };
-    pick.querySelector('input').onchange = (e) => onFile(e.target);
+    pick.onclick = () => takePhoto(cam, addPhoto);
     cam.onchange = () => onFile(cam);
     lib.onchange = () => onFile(lib);
     frag.getElementById('fromLib').onclick = () => lib.click();
@@ -829,7 +921,7 @@
       syncStart();
     });
     if (startPlace) { form.elements.initialStock.oninput = syncStart; wirePicks(startPlace); }
-    frag.getElementById('cancel').onclick = () => $back.click();
+    frag.getElementById('cancel').onclick = () => { if (!existing) DB.clearDraft().catch(() => {}); $back.click(); };
 
     // Same part number already in inventory (1.12): in this project, point to it instead of
     // making a second copy; in other projects, offer to fill in its description and photos.
@@ -848,7 +940,7 @@
         dupHere = here.product;
         dup.innerHTML = `<b>${esc(pn)} is already in ${esc(here.project.name)}</b> (${here.product.stock} in stock). Add stock to it instead, so it isn't listed twice.
           <div class="actions"><button type="button" class="btn primary" data-a="open">Open it</button></div>`;
-        dup.querySelector('[data-a=open]').onclick = () => go(`#/i/${here.product.id}`, true);
+        dup.querySelector('[data-a=open]').onclick = () => { DB.clearDraft().catch(() => {}); go(`#/i/${here.product.id}`, true); };
       } else if (!existing) {
         const src = rows[0].product;
         dup.innerHTML = `<b>${esc(pn)} is already in ${esc(rows.map(r => r.project.name).join(', '))}.</b> It will show once on the Inventory tab, with the total of every project.
@@ -876,6 +968,70 @@
       form.elements.who.value = keepWho;
       checkDup();
     };
+    if (form.elements.proj) form.elements.proj.addEventListener('change', () => saveDraft());
+
+    // Unsaved form (build 16): kept as you type, so if the phone closes the browser (for
+    // example while the camera app is open) the form comes back filled in. New inventory only.
+    const draftKey = fromInv ? 'inv' : `p:${projectId}`;
+    const PICKS = ['who', 'loc', 'own'];
+    let draftTimer = null;
+    function readFields() {
+      const f = form.elements;
+      const o = { proj: projectId, partNumber: f.partNumber.value, description: f.description.value,
+        initialStock: f.initialStock?.value, lowStockAt: f.lowStockAt.value };
+      for (const n of PICKS) if (f[n]) o[n] = { v: f[n].value, t: f[`${n}New`].value };
+      return o;
+    }
+    async function writeDraft() {
+      clearTimeout(draftTimer); draftTimer = null;
+      if (existing || !form.isConnected) return;
+      const fields = readFields();
+      const has = photos.length || fields.partNumber.trim() || fields.description.trim() || fields.lowStockAt.trim();
+      try {
+        if (has) await DB.setDraft({ key: draftKey, route: location.hash, at: Date.now(), fields, photos: photos.slice() });
+        else { const d = await DB.getDraft(); if (d?.key === draftKey) await DB.clearDraft(); }
+      } catch (e) { console.error(e); }
+    }
+    function saveDraft() { if (existing) return; clearTimeout(draftTimer); draftTimer = setTimeout(writeDraft, 400); }
+    if (!existing) {
+      form.addEventListener('input', saveDraft);
+      form.addEventListener('change', saveDraft);
+      frag.querySelectorAll('[data-s]').forEach(b => b.addEventListener('click', saveDraft));
+      // Leaving the screen (camera app, home button, another app) saves straight away.
+      const onHide = () => {
+        if (!form.isConnected) { document.removeEventListener('visibilitychange', onHide); return; }
+        if (document.hidden) writeDraft();
+      };
+      document.addEventListener('visibilitychange', onHide);
+      const d = await DB.getDraft().catch(() => null);
+      if (d && d.key === draftKey && Date.now() - d.at < DRAFT_DAYS * 864e5) {
+        const f = d.fields || {};
+        if (form.elements.proj && f.proj && f.proj !== projectId && projects.some(p => p.id === f.proj)) {
+          form.elements.proj.value = f.proj; form.elements.proj.onchange();
+        }
+        form.elements.partNumber.value = f.partNumber || '';
+        form.elements.description.value = f.description || '';
+        if (form.elements.initialStock && f.initialStock != null) form.elements.initialStock.value = f.initialStock;
+        form.elements.lowStockAt.value = f.lowStockAt || '';
+        for (const n of PICKS) {
+          const sel = form.elements[n], inp = form.elements[`${n}New`], v = f[n];
+          if (!sel || !v) continue;
+          if ([...sel.options].some(o => o.value === v.v)) sel.value = v.v;
+          else if (!v.v.startsWith('__')) { sel.value = '__new'; inp.value = v.v; }
+          if (v.t) inp.value = v.t;
+          inp.hidden = sel.value !== '__new';
+        }
+        photos.splice(0, photos.length, ...(d.photos || []).filter(Boolean));
+        showPhoto(); syncStart(); checkDup();
+        const note = frag.querySelector('.draft-note');
+        note.hidden = false;
+        const when = new Date(d.at).toDateString() === new Date().toDateString()
+          ? new Date(d.at).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' }) : fmtStamp(new Date(d.at).toISOString());
+        note.innerHTML = `<b>Picked up where you left off</b> at ${esc(when)}. This form wasn't saved yet.
+          <div class="actions"><button type="button" class="btn" data-a="fresh">Start over</button></div>`;
+        note.querySelector('[data-a=fresh]').onclick = async () => { await DB.clearDraft().catch(() => {}); render(); };
+      }
+    }
 
     form.onsubmit = async (e) => {
       e.preventDefault();
@@ -901,6 +1057,7 @@
         id: existing?.id, projectId, partNumber, description, photo: photos[0] || null, morePhotos: photos.slice(1),
         initialStock, location, owner, person, lowStockAt,
       });
+      if (!existing) { clearTimeout(draftTimer); draftTimer = null; await DB.clearDraft().catch(() => {}); }
       if (fromInv) ss.set('invLastProj', projectId);
       toast(existing ? 'Saved' : initialStock > 0 ? `Added ${initialStock} to ${project.name}` : `Added to ${project.name}`);
       goBack(existing ? `#/i/${rec.id}` : fromInv ? `#/inventory/${encodeURIComponent(invKey(rec))}` : `#/p/${projectId}`);
@@ -1490,15 +1647,18 @@
         if (!f) return;
         let blob;
         try { blob = await shrinkPhoto(f); } catch { toast('Could not read that photo'); return; }
+        onBlob(blob);
+      };
+      cam.onchange = () => onFile(cam);
+      lib.onchange = () => onFile(lib);
+      const onBlob = async (blob) => {
         const label = await textSheet('Name this photo', { placeholder: 'e.g. Door, Shelves, Area', label: 'Save photo' });
         if (label == null) return;      // cancelled: photo not saved
         await DB.addLocPhoto(name, label || `Photo ${photos.length + 1}`, blob);
         toast('Photo saved'); render();
       };
-      cam.onchange = () => onFile(cam);
-      lib.onchange = () => onFile(lib);
       frag.querySelector('[data-a=photo]').onclick = () => menuSheet('Add photo', [
-        { label: 'Take photo', run: () => cam.click() },
+        { label: 'Take photo', run: () => takePhoto(cam, onBlob) },
         { label: 'Choose from library', run: () => lib.click() },
       ]);
       frag.querySelectorAll('.photo-tile').forEach(t => t.onclick = () => photoViewer(photos, +t.dataset.i, {
@@ -2467,7 +2627,8 @@
   async function viewSettings() {
     setChrome({ title: 'Settings' });
     const last = backupPrefs.last();
-    const safe = await DB.beforeRestore().catch(() => null);
+    const [safe, room] = await Promise.all([DB.beforeRestore().catch(() => null), DB.storageInfo()]);
+    const mb = (b) => b >= 1e9 ? `${(b / 1e9).toFixed(1)} GB` : `${Math.max(0.1, b / 1e6).toFixed(1)} MB`;
     const frag = h(`<div>
       <p class="desc">Storage locations, product owners and team members are on the <b>Lists</b> tab.</p>
       <h2 class="section">Backup and export</h2>
@@ -2489,6 +2650,18 @@
           <input type="checkbox" class="switch" name="remind" ${backupPrefs.remind() ? 'checked' : ''}>
         </label>
       </div>
+      ${room ? `<h2 class="section">Storage on this phone</h2>
+      <div class="list">
+        <div class="card row">
+          <div class="grow"><div class="t">Storage used: ${mb(room.usage)}</div>
+            <div class="s">Inventory, photos and History${room.quota ? `. About ${mb(Math.max(0, room.quota - room.usage))} more is free for this app.` : '.'}</div></div>
+        </div>
+        <div class="card row">
+          <div class="grow"><div class="t">Kept safe from clean-up: ${room.persisted ? 'Yes' : 'No'}</div>
+            <div class="s">${room.persisted ? "Your phone won't clear this app's data to free up space."
+              : "If the phone gets very low on space, it could clear this app's data. Keep backing up."}</div></div>
+        </div>
+      </div>` : ''}
       <h2 class="section">Delete data</h2>
       <div class="list">
         <a class="card row" href="#/settings/delete-items">
@@ -2554,9 +2727,10 @@
       ['Projects', 'Each project keeps its own inventory. On the <b>Projects</b> tab tap <b>New project</b>. Open a project and tap <b>⋮</b> to rename or delete it.'],
       ['Deleting inventory, projects or all data', 'To delete products but keep their project, tap <b>Settings</b> (bottom of the screen) › <b>Delete inventory</b>, tick the products (or <b>Select all</b> under a project) and tap <b>Delete</b>. To delete whole projects, tap <b>Delete projects</b>, tick the projects you want gone and tap <b>Delete</b>. To wipe everything, tap <b>Delete all data</b> and type <b>DELETE</b> to confirm. Both offer <b>Back up first</b>. A safety copy is kept, so if it was a mistake, tap <b>Undo</b> straight away or <b>Undo last delete</b> in Settings. Only the last restore or delete can be undone.'],
       ['Adding inventory', 'Tap <b>Add inventory</b> on the <b>Inventory</b> tab, or open a project and tap <b>Add inventory</b> there. From the Inventory tab, pick the <b>Project</b> first. Tap the photo box to take a picture, enter the model/part number and a description, then the quantity, team member, storage location and product owner, and tap <b>Add inventory</b>. If that part number is already in the project, the form says so: tap <b>Open it</b> and use <b>+ Add</b> there instead. If it is in another project, tap <b>Use its description and photos</b> to fill them in.'],
-      ['Photos', 'Tap the photo box to use the camera, or <b>Choose from library</b> for a saved picture. A product can have as many photos as you like: open the product, tap <b>⋮</b> › <b>Edit product and photos</b>, then tap <b>+ Add</b>. The <b>★ main photo</b> is the one shown in lists. Tap a photo there to make it the main photo or remove it. On the product page, swipe the photos left and right and tap one to see it full size.'],
+      ['Photos', 'Tap the photo box to open the camera inside the app. Tap the round button to take the picture, then <b>Use photo</b> or <b>Retake</b>. Tap ⚡ for the flashlight. If the camera won\'t start, tap <b>Use phone camera</b>. Or tap <b>Choose from library</b> for a saved picture. A product can have as many photos as you like: open the product, tap <b>⋮</b> › <b>Edit product and photos</b>, then tap <b>+ Add</b>. The <b>★ main photo</b> is the one shown in lists. Tap a photo there to make it the main photo or remove it. On the product page, swipe the photos left and right and tap one to see it full size.'],
       ['Adding and removing stock', 'Tap a product to open it, then tap <b>+ Add</b> or <b>− Remove</b>. Pick the date (today is filled in), enter the quantity and, if you like, a note such as "10 for sections 15A". Add asks for the storage location and product owner. Remove asks where the stock comes from and won\'t let you take more than that spot holds. The form shows the stock there and the total after the change. Notes you used recently appear under the note box: tap one to reuse it. Right after saving, tap <b>Undo</b> at the bottom if it was a mistake.'],
       ['Storage locations and product owners', 'Stock is counted separately for each storage location (for example Bin A, Truck) and product owner. The product page shows the total and how much is at each one. In the Add form, pick a storage location and product owner, or choose <b>+ New storage location…</b> / <b>+ New product owner…</b> to type a new one. The names the project already uses show first, under <b>This project</b>. Every project shares one list of each: tap <b>Lists</b> (bottom of the screen). Tap a name there to see what is stored there (or owned), and to rename or remove it with <b>⋮</b>. Renaming updates every project and History.'],
+      ['If the app gets closed', 'The Add inventory form saves what you type as you go. If the phone closes the app before you tap <b>Add inventory</b>, open the form again and it is filled back in, photos included. Tap <b>Start over</b> to clear it.'],
       ['Storage location photos', 'Tap <b>Lists</b> › <b>Storage Locations</b> and tap a location. Tap <b>+ Add photo</b>, take a photo or choose one from your library, then give it a name, like Door or Shelves. Add as many as you like. Tap a photo to see it full size, swipe to see the next one, and use <b>Rename</b> or <b>Delete</b> at the bottom.'],
       ['Project product owners', 'When you create a project, tap the product owners who own the material on it (or type a new one). They show first when you add stock in that project, and if there is only one it is filled in for you. To change them, open the project and tap <b>⋮</b> › <b>Product owners for this project</b>.'],
       ['Team members', 'Add, Remove, Move and Correct stock count ask which <b>Team Member</b> is doing it. Pick a name, or choose <b>+ New team member…</b> to type one. The last name you picked is filled in next time. To rename or remove names, tap <b>Lists</b> (bottom of the screen) › <b>Team Members</b>. Renaming changes the name on every entry. Entries from before version 1.6 show Team Member as <b>Not set</b>; tap one in History and <b>Edit</b> it to fill it in.'],
@@ -2747,7 +2921,15 @@
   window.addEventListener('pageshow', (e) => { if (e.persisted) render(); });
 
   // ---------- boot ----------
-  DB.open().then(render).then(maybeShowWhatsNew).catch(err => {
+  /** Build 16: an Add inventory form that wasn't saved (for example the phone closed the
+   *  browser while it was open) is offered again when the app starts somewhere else. */
+  async function offerDraft() {
+    const d = await DB.getDraft().catch(() => null);
+    if (!d || Date.now() - d.at >= DRAFT_DAYS * 864e5 || !d.route || location.hash === d.route) return;
+    if ($sheetRoot.firstElementChild) return;     // What's New is showing
+    toast('You have an Add inventory form that wasn\'t saved', [{ label: 'Open it', run: () => go(d.route) }]);
+  }
+  DB.open().then(render).then(maybeShowWhatsNew).then(offerDraft).catch(err => {
     $view.replaceChildren(h(`<div class="empty"><b>Storage unavailable</b>${esc(err.message || err)}<br>Private browsing can block on-device storage.</div>`));
   });
   DB.persist();
