@@ -5,7 +5,7 @@ A phone-first inventory tracker that works offline and installs to your home scr
 **Open the app:** https://swiftcoyote.github.io/Simple-Inventory/
 (on your phone, use the browser's *Add to Home Screen* to install it).
 
-- **Tabs** (1.9): a bottom tab bar switches between Projects, Inventory, Reports and Settings.
+- **Tabs** (1.9): a bottom tab bar switches between Projects, Inventory, Lists (1.10), Reports and Settings.
   Swipe left/right on those four screens to change tab (not inside projects, not from the
   screen edges). Tab switches replace the history entry, and Projects reopens the last
   project/product.
