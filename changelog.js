@@ -4,6 +4,15 @@
  * to match (e.g. '1.1-build2'). Builds count up and never reset. */
 window.CHANGELOG = [
   {
+    version: '1.13', build: 15, date: '2026-11-23',
+    title: 'Low-stock warning on the product page',
+    changes: [
+      'The Remove stock form no longer has the Low-stock warning box. It still shows on Add stock.',
+      'Set the low-stock warning right on the product page: tap Low-stock warning under the stock (it shows the current number, or Off). It is also in the ⋮ menu.',
+      'On the Inventory tab product page, Low-stock warning lets you set the number for each project in one place.',
+    ],
+  },
+  {
     version: '1.12', build: 14, date: '2026-11-23',
     title: 'Add inventory from the Inventory tab',
     changes: [
