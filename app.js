@@ -141,8 +141,8 @@
   // phone is preselected, so a person using their own phone picks it once.
   const lastPerson = { get: () => ls.get('lastPerson') || '', set: (v) => { if (v) ls.set('lastPerson', v); } };
   const personStart = (people, entry) => entry ? (entry.person || '') : people.includes(lastPerson.get()) ? lastPerson.get() : null;
-  const personHtml = (people, entry) => pickHtml('who', 'Who', people, personStart(people, entry), 'person');
-  const WHO_MSG = 'Choose or type who is doing this';
+  const personHtml = (people, entry) => pickHtml('who', 'Team Member', people, personStart(people, entry), 'team member');
+  const WHO_MSG = 'Choose or type the team member doing this';
 
   /** A dropdown of a project's locations or owners, with "+ New …" that opens a text box.
    *  value: the name to preselect; '' preselects "Not set" (old entries); null = none. */
@@ -268,7 +268,7 @@
           ${dateHtml(startDate, today)}
           ${personHtml(people, entry)}
           ${isOut ? fromHtml(sources, startFrom)
-            : pickHtml('loc', 'Location', project.locations || [], startLoc, 'location') + pickHtml('own', 'Owner', project.owners || [], startOwner, 'owner')}
+            : pickHtml('loc', 'Storage Location', project.locations || [], startLoc, 'storage location') + pickHtml('own', 'Product Owner', project.owners || [], startOwner, 'product owner')}
           ${qtyHtml(`Quantity ${isOut ? 'removed' : 'added'}`, startQty)}
           <div class="preview" aria-live="polite"></div>
           ${noteHtml(entry?.note, isOut ? 'e.g. 10 for sections 15A' : 'e.g. delivery from supplier, PO 5521')}
@@ -321,8 +321,8 @@
             const person = readPick(f, 'who');
             if (person == null) { toast(WHO_MSG); return; }
             if (isOut && !pl) { toast('Choose where it comes from'); return; }
-            if (!isOut && pl.location == null) { toast('Choose or type a location'); return; }
-            if (!isOut && pl.owner == null) { toast('Choose or type an owner'); return; }
+            if (!isOut && pl.location == null) { toast('Choose or type a storage location'); return; }
+            if (!isOut && pl.owner == null) { toast('Choose or type a product owner'); return; }
             const n = qty();
             if (n < 1) { toast('Enter a quantity of 1 or more'); f.elements.qty.focus(); return; }
             if (isOut) {
@@ -368,8 +368,8 @@
           ${fromHtml(sources, startFrom)}
           <div class="to-group">
             <div class="to-lbl">Move to</div>
-            ${pickHtml('loc', 'Location', project.locations || [], entry ? (entry.toLocation || '') : null, 'location')}
-            ${pickHtml('own', 'Owner', project.owners || [], entry ? (entry.toOwner || '') : null, 'owner')}
+            ${pickHtml('loc', 'Storage Location', project.locations || [], entry ? (entry.toLocation || '') : null, 'storage location')}
+            ${pickHtml('own', 'Product Owner', project.owners || [], entry ? (entry.toOwner || '') : null, 'product owner')}
           </div>
           ${qtyHtml('Quantity moved', entry ? entry.qty : 1)}
           <div class="preview" aria-live="polite"></div>
@@ -413,10 +413,10 @@
             if (readPick(f, 'who') == null) { toast(WHO_MSG); return; }
             if (!fr) { toast('Choose where it comes from'); return; }
             if (l == null) { toast('Choose or type where it goes'); return; }
-            if (o == null) { toast('Choose or type an owner'); return; }
+            if (o == null) { toast('Choose or type a product owner'); return; }
             const person = readPick(f, 'who');
             if (person == null) { toast(WHO_MSG); return; }
-            if (fr.location === l && fr.owner === o) { toast('Pick a different location or owner to move to'); return; }
+            if (fr.location === l && fr.owner === o) { toast('Pick a different storage location or product owner to move to'); return; }
             if (n < 1) { toast('Enter a quantity of 1 or more'); return; }
             if (n > fr.qty) { toast(`Only ${fr.qty} at ${placeLabel(fr.location, fr.owner)}`); f.elements.qty.value = Math.max(1, fr.qty); draw(); return; }
             const d = readDate(f, today, entry, startDate);
@@ -438,11 +438,11 @@
     const hasUnsetLoc = buckets.some(b => !b.location && b.qty), hasUnsetOwn = buckets.some(b => !b.owner && b.qty);
     return new Promise((resolve) => {
       sheet(`<h3>Correct stock count</h3>
-        <p class="desc" style="margin-top:-8px">${esc(productName(product))}. Enter what is actually there for one location and owner.</p>
+        <p class="desc" style="margin-top:-8px">${esc(productName(product))}. Enter what is actually there for one storage location and product owner.</p>
         <form class="move-form">
           ${personHtml(people)}
-          ${pickHtml('loc', 'Location', project.locations || [], one ? one.location : hasUnsetLoc && !(project.locations || []).length ? '' : null, 'location')}
-          ${pickHtml('own', 'Owner', project.owners || [], one ? one.owner : hasUnsetOwn && !(project.owners || []).length ? '' : null, 'owner')}
+          ${pickHtml('loc', 'Storage Location', project.locations || [], one ? one.location : hasUnsetLoc && !(project.locations || []).length ? '' : null, 'storage location')}
+          ${pickHtml('own', 'Product Owner', project.owners || [], one ? one.owner : hasUnsetOwn && !(project.owners || []).length ? '' : null, 'product owner')}
           ${qtyHtml('Actual count here', one ? one.qty : 0, 0)}
           <div class="preview" aria-live="polite"></div>
           <div class="actions">
@@ -471,8 +471,8 @@
           f.onsubmit = (e) => {
             e.preventDefault();
             const l = readPick(f, 'loc'), o = readPick(f, 'own'), n = qty();
-            if (l == null) { toast('Choose or type a location'); return; }
-            if (o == null) { toast('Choose or type an owner'); return; }
+            if (l == null) { toast('Choose or type a storage location'); return; }
+            if (o == null) { toast('Choose or type a product owner'); return; }
             if (n < 0) { toast('Enter 0 or more'); return; }
             const person = readPick(f, 'who');
             if (person == null) { toast(WHO_MSG); return; }
@@ -496,8 +496,8 @@
       <dl class="entry">
         <dt>Date</dt><dd>${esc(fmtWhen(m.at, m.dateOnly))}</dd>
         ${isMove ? `<dt>From</dt><dd>${placeHtml(m.location, m.owner)}</dd><dt>To</dt><dd>${placeHtml(m.toLocation, m.toOwner)}</dd>`
-          : `<dt>Location</dt><dd>${nameHtml(m.location)}</dd><dt>Owner</dt><dd>${nameHtml(m.owner)}</dd>`}
-        <dt>Who</dt><dd>${nameHtml(m.person)}</dd>
+          : `<dt>Storage Location</dt><dd>${nameHtml(m.location)}</dd><dt>Product Owner</dt><dd>${nameHtml(m.owner)}</dd>`}
+        <dt>Team Member</dt><dd>${nameHtml(m.person)}</dd>
         <dt>Total</dt><dd>${before} → ${after}</dd>
         <dt>Note</dt><dd>${m.note ? esc(m.note) : '<span class="muted">None</span>'}</dd>
       </dl>
@@ -507,11 +507,11 @@
           const diffs = [];
           if (isMove ? e.qty !== next.qty : e.delta !== next.delta) diffs.push(isMove ? `quantity ${e.qty} → ${next.qty}` : `quantity ${signed(e.delta)} → ${signed(next.delta)}`);
           if (e.at !== next.at) diffs.push(`date ${esc(fmtWhen(e.at, e.dateOnly))} → ${esc(fmtWhen(next.at, next.dateOnly))}`);
-          if ((e.location || '') !== (next.location || '')) diffs.push(`${isMove ? 'from ' : ''}location ${esc(e.location || NOT_SET)} → ${esc(next.location || NOT_SET)}`);
-          if ((e.owner || '') !== (next.owner || '')) diffs.push(`${isMove ? 'from ' : ''}owner ${esc(e.owner || NOT_SET)} → ${esc(next.owner || NOT_SET)}`);
-          if (isMove && (e.toLocation || '') !== (next.toLocation || '')) diffs.push(`to location ${esc(e.toLocation || NOT_SET)} → ${esc(next.toLocation || NOT_SET)}`);
-          if (isMove && (e.toOwner || '') !== (next.toOwner || '')) diffs.push(`to owner ${esc(e.toOwner || NOT_SET)} → ${esc(next.toOwner || NOT_SET)}`);
-          if ((e.person || '') !== (next.person || '')) diffs.push(`who ${esc(e.person || NOT_SET)} → ${esc(next.person || NOT_SET)}`);
+          if ((e.location || '') !== (next.location || '')) diffs.push(`${isMove ? 'from ' : ''}storage location ${esc(e.location || NOT_SET)} → ${esc(next.location || NOT_SET)}`);
+          if ((e.owner || '') !== (next.owner || '')) diffs.push(`${isMove ? 'from ' : ''}product owner ${esc(e.owner || NOT_SET)} → ${esc(next.owner || NOT_SET)}`);
+          if (isMove && (e.toLocation || '') !== (next.toLocation || '')) diffs.push(`to storage location ${esc(e.toLocation || NOT_SET)} → ${esc(next.toLocation || NOT_SET)}`);
+          if (isMove && (e.toOwner || '') !== (next.toOwner || '')) diffs.push(`to product owner ${esc(e.toOwner || NOT_SET)} → ${esc(next.toOwner || NOT_SET)}`);
+          if ((e.person || '') !== (next.person || '')) diffs.push(`team member ${esc(e.person || NOT_SET)} → ${esc(next.person || NOT_SET)}`);
           if ((e.note || '') !== (next.note || '')) diffs.push(`note “${esc(e.note || '')}” → “${esc(next.note || '')}”`);
           return `<li><span class="muted">${esc(fmtWhen(e.editedAt))}:</span> ${diffs.join('; ') || 'no change'}</li>`;
         }).join('')}</ul>` : ''}
@@ -562,7 +562,7 @@
   // ---------- chrome ----------
   function setChrome({ title, back, menu }) {
     $title.textContent = title;
-    document.title = title === 'Inventory' ? 'Simple Inventory' : `${title} · Inventory`;
+    document.title = title === 'Projects' ? 'Simple Inventory' : `${title} · Inventory`;
     $back.hidden = !back;
     $back.onclick = back ? () => goBack(back) : null;
     $menu.hidden = !menu;
@@ -571,7 +571,7 @@
 
   // ---------- views ----------
   async function viewHome() {
-    setChrome({ title: 'Inventory' });
+    setChrome({ title: 'Projects' });
     const projects = await DB.listProjects();
     const frag = h(`<div>
       ${backupBannerHtml(projects.length > 0)}
@@ -602,7 +602,7 @@
       title: project.name, back: '#/',
       menu: () => menuSheet(project.name, [
         { label: 'Reports', run: () => { repState.proj = id; repState.prod = ALL; saveRep(); go('#/reports', true); } },
-        { label: 'Locations and owners', run: () => go(`#/p/${id}/places`) },
+        { label: 'Storage locations and product owners', run: () => go(`#/p/${id}/places`) },
         { label: 'Export to spreadsheet (CSV)', run: () => exportSheet(id) },
         { label: 'Rename project', run: async () => {
           const name = await textSheet('Rename project', { value: project.name });
@@ -692,8 +692,8 @@
         </div></label>
         <div id="startPlace" hidden>
           ${personHtml(people)}
-          ${pickHtml('loc', 'Location', project.locations || [], startLoc, 'location')}
-          ${pickHtml('own', 'Owner', project.owners || [], startOwner, 'owner')}
+          ${pickHtml('loc', 'Storage Location', project.locations || [], startLoc, 'storage location')}
+          ${pickHtml('own', 'Product Owner', project.owners || [], startOwner, 'product owner')}
         </div>`}
       <label class="field"><span>Low-stock warning (optional)</span>
         <input class="input" name="lowStockAt" type="number" inputmode="numeric" min="0" step="1" value="${existing?.lowStockAt ?? ''}" placeholder="Off">
@@ -752,8 +752,8 @@
       if (initialStock > 0) {
         location = readPick(form, 'loc'); owner = readPick(form, 'own'); person = readPick(form, 'who');
         if (person == null) { toast('Choose or type who is adding the starting stock'); return; }
-        if (location == null) { toast('Choose or type a location for the starting stock'); return; }
-        if (owner == null) { toast('Choose or type an owner for the starting stock'); return; }
+        if (location == null) { toast('Choose or type a storage location for the starting stock'); return; }
+        if (owner == null) { toast('Choose or type a product owner for the starting stock'); return; }
         lastPlace.set(projectId, { location, owner });
         lastPerson.set(person);
       }
@@ -862,11 +862,188 @@
     return frag;
   }
 
+  // ---------- Inventory tab (1.9): every product from every project ----------
+  // Products with the same part number in different projects are one item here,
+  // with a combined total. Products without a part number stay on their own.
+  const invKey = (p) => (p.partNumber || '').trim() ? `pn:${p.partNumber.trim().toLowerCase()}` : `id:${p.id}`;
+  const invState = { q: '', proj: '__all', loc: '__all', own: '__all', low: false, sort: 'pn' };
+  const natCmp = (a, b) => (a || '').localeCompare(b || '', undefined, { numeric: true, sensitivity: 'base' });
+
+  async function inventoryItems() {
+    const data = await DB.exportAll();
+    const projById = Object.fromEntries(data.projects.map(p => [p.id, p]));
+    const movesBy = {};
+    for (const m of data.movements) (movesBy[m.productId] || (movesBy[m.productId] = [])).push(m);
+    const items = new Map();
+    for (const p of data.products) {
+      if (!projById[p.projectId]) continue;
+      const k = invKey(p);
+      const it = items.get(k) || { key: k, partNumber: p.partNumber || '', description: '', photo: null, rows: [] };
+      if (!it.description && p.description) it.description = p.description;
+      if (!it.photo && p.photo) it.photo = p.photo;
+      it.rows.push({ product: p, project: projById[p.projectId], buckets: DB.bucketsOf(movesBy[p.id] || []) });
+      items.set(k, it);
+    }
+    for (const it of items.values()) {
+      it.rows.sort((a, b) => natCmp(a.project.name, b.project.name));
+      it.total = it.rows.reduce((a, r) => a + r.product.stock, 0);
+      it.low = it.rows.some(r => DB.isLow(r.product));
+      it.locations = new Set(it.rows.flatMap(r => r.buckets.filter(b => b.qty).map(b => b.location)));
+    }
+    return { items: [...items.values()], projects: data.projects.slice().sort((a, b) => natCmp(a.name, b.name)) };
+  }
+
+  async function viewInventory() {
+    setChrome({ title: 'Inventory' });
+    const { items, projects } = await inventoryItems();
+    const st = invState;
+    const locs = new Set(), owns = new Set();
+    for (const it of items) for (const r of it.rows) for (const b of r.buckets) { locs.add(b.location); owns.add(b.owner); }
+    for (const p of projects) { (p.locations || []).forEach(n => locs.add(n)); (p.owners || []).forEach(n => owns.add(n)); }
+    if (st.proj !== ALL && !projects.some(p => p.id === st.proj)) st.proj = ALL;
+    if (st.loc !== ALL && !locs.has(st.loc)) st.loc = ALL;
+    if (st.own !== ALL && !owns.has(st.own)) st.own = ALL;
+    const opts = (set, cur) => [...set].sort((a, b) => (a === '') - (b === '') || natCmp(a, b))
+      .map(n => `<option value="${esc(n)}" ${cur === n ? 'selected' : ''}>${esc(n || NOT_SET)}</option>`).join('');
+    const sel = (name, label, inner, cur) => `<label class="field"><span>${label}</span>
+      <select class="input" name="${name}"><option value="${ALL}" ${cur === ALL ? 'selected' : ''}>All</option>${inner}</select></label>`;
+    const nFilters = () => [st.proj, st.loc, st.own].filter(v => v !== ALL).length;
+    const lowCount = items.filter(i => i.low).length;
+    if (!lowCount) st.low = false;
+
+    const frag = h(`<div>
+      ${items.length ? `
+        <input class="search" type="search" placeholder="Search part #, description or project" value="${esc(st.q)}" autocomplete="off" enterkeyhint="search">
+        <form class="card rfilters inv-filters" autocomplete="off">
+          <details class="more-filters" ${nFilters() ? 'open' : ''}>
+            <summary>Filters and sort${nFilters() ? ` (${nFilters()})` : ''}</summary>
+            ${sel('proj', 'Project', projects.map(p => `<option value="${esc(p.id)}" ${st.proj === p.id ? 'selected' : ''}>${esc(p.name)}</option>`).join(''), st.proj)}
+            ${sel('loc', 'Storage Location', opts(locs, st.loc), st.loc)}
+            ${sel('own', 'Product Owner', opts(owns, st.own), st.own)}
+            <label class="field"><span>Sort by</span><select class="input" name="sort">
+              ${[['pn', 'Part number'], ['desc', 'Description'], ['low', 'Lowest stock first']].map(([v, l]) => `<option value="${v}" ${st.sort === v ? 'selected' : ''}>${l}</option>`).join('')}
+            </select></label>
+            <button type="button" class="link-btn" data-a="clear" ${nFilters() ? '' : 'hidden'}>Clear filters</button>
+          </details>
+        </form>
+        <div class="summary-row">
+          <div class="summary" id="invSum"></div>
+          ${lowCount ? `<button class="filter ${st.low ? 'on' : ''}" id="lowOnly" aria-pressed="${st.low}">Low stock only (${lowCount})</button>` : ''}
+        </div>
+        <div class="list" id="ilist"></div>`
+      : `<div class="empty">${ICON.box}<b>No products yet</b>Products you add in any project show up here, all in one list.</div>`}
+    </div>`);
+
+    const list = frag.getElementById('ilist'), sumEl = frag.getElementById('invSum');
+    const draw = () => {
+      if (!list) return;
+      const q = st.q.trim().toLowerCase();
+      const shown = [];
+      for (const it of items) {
+        let rows = it.rows.filter(r => st.proj === ALL || r.project.id === st.proj);
+        const placeOk = (b) => (st.loc === ALL || b.location === st.loc) && (st.own === ALL || b.owner === st.own);
+        const placed = st.loc === ALL && st.own === ALL;
+        if (!placed) rows = rows.filter(r => r.buckets.some(placeOk));
+        if (!rows.length) continue;
+        if (q && !`${it.partNumber} ${it.description} ${it.rows.map(r => `${r.product.description} ${r.project.name}`).join(' ')}`.toLowerCase().includes(q)) continue;
+        if (st.low && !it.low) continue;
+        const qty = placed ? rows.reduce((a, r) => a + r.product.stock, 0)
+          : rows.reduce((a, r) => a + r.buckets.filter(placeOk).reduce((s, b) => s + b.qty, 0), 0);
+        shown.push({ it, rows, qty });
+      }
+      const cmp = { pn: (a, b) => natCmp(a.it.partNumber || a.it.description, b.it.partNumber || b.it.description),
+        desc: (a, b) => natCmp(a.it.description || a.it.partNumber, b.it.description || b.it.partNumber),
+        low: (a, b) => a.qty - b.qty || natCmp(a.it.partNumber, b.it.partNumber) }[st.sort];
+      shown.sort(cmp);
+      const units = shown.reduce((a, s) => a + s.qty, 0);
+      sumEl.textContent = `${plural(shown.length, 'product')} · ${plural(units, 'unit')}${st.loc !== ALL || st.own !== ALL ? ' there' : ' in stock'}`;
+      list.replaceChildren(h(shown.length ? shown.map(({ it, rows, qty }) => {
+        const projNames = rows.map(r => r.project.name);
+        const where = projNames.length === 1 ? esc(projNames[0]) : `${projNames.length} projects`;
+        const nLoc = it.locations.size;
+        return `<a class="card row" href="#/inventory/${encodeURIComponent(it.key)}">
+          ${it.photo ? `<img class="thumb" alt="" src="${blobUrl(it.photo)}">` : `<div class="thumb">${ICON.box}</div>`}
+          <div class="grow"><div class="t">${esc(it.partNumber || '—')}${it.low ? ' <span class="tag low">Low</span>' : ''}</div>
+            <div class="s">${esc(it.description)}</div>
+            <div class="s inv-where">${where}${nLoc ? ` · ${plural(nLoc, 'storage location')}` : ''}</div></div>
+          <div class="count ${qty ? '' : 'zero'}"><span class="n">${qty}</span><span class="l">${st.loc !== ALL || st.own !== ALL ? 'there' : 'in stock'}</span></div>
+        </a>`;
+      }).join('') : `<div class="empty">No products match${q ? ` “${esc(st.q)}”` : ''}${st.low ? ' in low stock' : ''}${nFilters() ? ' with these filters' : ''}.</div>`));
+    };
+
+    const s = frag.querySelector('.search');
+    if (s) s.oninput = () => { st.q = s.value; draw(); };
+    const lo = frag.getElementById('lowOnly');
+    if (lo) lo.onclick = () => { st.low = !st.low; lo.classList.toggle('on', st.low); lo.setAttribute('aria-pressed', st.low); draw(); };
+    const f = frag.querySelector('form.inv-filters');
+    if (f) {
+      const sync = () => {
+        const n = nFilters();
+        f.querySelector('summary').textContent = `Filters and sort${n ? ` (${n})` : ''}`;
+        f.querySelector('[data-a="clear"]').hidden = !n;
+      };
+      f.addEventListener('change', (e) => { st[e.target.name] = e.target.value; sync(); draw(); });
+      f.querySelector('[data-a="clear"]').onclick = () => {
+        st.proj = st.loc = st.own = ALL;
+        for (const n of ['proj', 'loc', 'own']) f.elements[n].value = ALL;
+        sync(); draw();
+      };
+    }
+    draw();
+    return frag;
+  }
+
+  async function viewInventoryItem(key) {
+    const { items } = await inventoryItems();
+    const it = items.find(i => i.key === key);
+    if (!it) return notFound();
+    setChrome({ title: it.partNumber || it.description || 'Product', back: '#/inventory' });
+    const byLoc = new Map(), byOwn = new Map();
+    for (const r of it.rows) for (const b of r.buckets) {
+      if (!b.qty) continue;
+      byLoc.set(b.location, (byLoc.get(b.location) || 0) + b.qty);
+      byOwn.set(b.owner, (byOwn.get(b.owner) || 0) + b.qty);
+    }
+    const sortNames = (m) => [...m].sort((a, b) => (a[0] === '') - (b[0] === '') || natCmp(a[0], b[0]));
+    const nameList = (m) => `<ul class="card places inv-places">${sortNames(m).map(([n, q]) => `<li><span class="pl">${nameHtml(n)}</span><b>${q}</b></li>`).join('')}</ul>`;
+    const descs = [...new Set(it.rows.map(r => r.product.description).filter(Boolean))];
+    const frag = h(`<div>
+      ${it.photo ? `<img class="hero" alt="" src="${blobUrl(it.photo)}">` : `<div class="hero">${ICON.camera}</div>`}
+      <div class="pn">${esc(it.partNumber || '—')}</div>
+      ${descs.map(d => `<p class="desc">${esc(d)}</p>`).join('')}
+      <div class="card stockbox-wrap">
+        <div class="stockbox">
+          <div><div class="lbl">Total in stock</div>
+            <div class="low-line">${plural(it.rows.length, 'project')} · ${plural(byLoc.size, 'storage location')}</div></div>
+          <div class="big ${it.total ? '' : 'zero'}">${it.total}</div>
+        </div>
+      </div>
+      <h2 class="section">Projects</h2>
+      <p class="hint inv-hint">Tap a project to add, remove or move stock there and see its History.</p>
+      <div class="list">${it.rows.map(({ product: p, project, buckets }) => {
+        const low = DB.isLow(p), places = buckets.filter(b => b.qty);
+        return `<a class="card inv-proj" href="#/i/${p.id}">
+          <div class="row">
+            <div class="proj-icon">${esc((project.name.trim()[0] || '?').toUpperCase())}</div>
+            <div class="grow"><div class="t">${esc(project.name)}${low ? ' <span class="tag low">Low</span>' : ''}</div>
+              ${p.lowStockAt != null ? `<div class="s">Warns at ${p.lowStockAt} or less</div>` : ''}</div>
+            <div class="count ${p.stock ? '' : 'zero'} ${low ? 'low' : ''}"><span class="n">${p.stock}</span><span class="l">in stock</span></div>
+            ${ICON.chev}
+          </div>
+          ${places.length ? `<ul class="places">${places.map(b => `<li><span class="pl">${placeHtml(b.location, b.owner)}</span><b>${b.qty}</b></li>`).join('')}</ul>` : ''}
+        </a>`;
+      }).join('')}</div>
+      ${byLoc.size ? `<h2 class="section">By storage location</h2>${nameList(byLoc)}` : ''}
+      ${byOwn.size ? `<h2 class="section">By product owner</h2>${nameList(byOwn)}` : ''}
+    </div>`);
+    return frag;
+  }
+
   // ---------- locations & owners manager ----------
   async function viewPlaces(id) {
     const project = await DB.getProject(id);
     if (!project) return notFound();
-    setChrome({ title: 'Locations and owners', back: `#/p/${id}` });
+    setChrome({ title: 'Storage locations and product owners', back: `#/p/${id}` });
     const section = (kind, title, word, ex) => {
       const list = project[kind] || [];
       return `<h2 class="section">${title}</h2>
@@ -878,13 +1055,13 @@
         <button class="btn wide" data-k="${kind}" data-a="add" data-w="${word}" data-ex="${esc(ex)}">+ Add ${word}</button>`;
     };
     const frag = h(`<div>
-      <p class="desc">Stock is counted separately for each location and owner. These lists are only for ${esc(project.name)}.</p>
-      ${section('locations', 'Locations', 'location', 'e.g. Bin A, Truck, Site trailer')}
-      ${section('owners', 'Owners', 'owner', 'Who owns the material')}
+      <p class="desc">Stock is counted separately for each storage location and product owner. These lists are only for ${esc(project.name)}.</p>
+      ${section('locations', 'Storage Locations', 'storage location', 'e.g. Bin A, Truck, Site trailer')}
+      ${section('owners', 'Product Owners', 'product owner', 'Who owns the material')}
     </div>`);
     frag.querySelectorAll('[data-a]').forEach(b => b.onclick = async () => {
       const kind = b.dataset.k, name = (project[kind] || [])[+b.dataset.i];
-      const word = kind === 'locations' ? 'location' : 'owner';
+      const word = kind === 'locations' ? 'storage location' : 'product owner';
       if (b.dataset.a === 'add') {
         const v = await textSheet(`New ${word}`, { placeholder: b.dataset.ex, label: 'Add' });
         if (v) { await DB.addName(id, kind, v); render(); }
@@ -1095,7 +1272,7 @@
     const projects = await DB.listProjects();
     if (!projects.length) return h(`<div class="empty">${ICON.box}<b>No projects</b>There is nothing to delete.</div>`);
     const frag = h(`<div class="del-page">
-      <p class="desc">Tick the projects to delete. Their products, photos, locations, owners and History go with them.</p>
+      <p class="desc">Tick the projects to delete. Their products, photos, storage locations, product owners and History go with them.</p>
       <div class="sel-bar"><span data-a="count">None selected</span><button type="button" class="link-btn" data-a="all">Select all</button></div>
       <div class="list">${projects.map(p => `
         <label class="card row check-row">
@@ -1132,7 +1309,7 @@
     const groups = await Promise.all(projects.map(async p => ({ p,
       items: (await DB.listProducts(p.id)).sort((a, b) => nat(a.partNumber, b.partNumber) || nat(a.description, b.description)) })));
     const frag = h(`<div>
-      <p class="desc">Tick the products to delete. Their photos and History go with them. The projects, locations and owners stay.</p>
+      <p class="desc">Tick the products to delete. Their photos and History go with them. The projects, storage locations and product owners stay.</p>
       <div class="sel-bar"><span data-a="count">None selected</span></div>
       ${groups.map(({ p, items }) => `<div class="del-group" data-p="${esc(p.id)}">
         <div class="sel-bar group-head"><h2 class="section">${esc(p.name)}</h2><button type="button" class="link-btn" data-a="grp">Select all</button></div>
@@ -1295,7 +1472,7 @@
     const files = [];
 
     if (which !== 'history') {
-      const rows = [['Project', 'Part number', 'Description', 'Location', 'Owner', 'Quantity', 'Product total', 'Low-stock warning at', 'Low']];
+      const rows = [['Project', 'Part number', 'Description', 'Storage Location', 'Product Owner', 'Quantity', 'Product total', 'Low-stock warning at', 'Low']];
       for (const p of products) {
         const moves = byProduct[p.id] || [];
         const total = moves.reduce((a, m) => a + m.delta, 0);
@@ -1309,7 +1486,7 @@
       files.push(csvFile(`inventory-stock-${tag}-${toDateInput()}.csv`, rows));
     }
     if (which !== 'stock') {
-      const rows = [['Date', 'Time', 'Project', 'Part number', 'Description', 'Type', 'Quantity', 'Location', 'Owner', 'Moved to location', 'Moved to owner', 'Who', 'Product total after', 'Note', 'Edited']];
+      const rows = [['Date', 'Time', 'Project', 'Part number', 'Description', 'Type', 'Quantity', 'Storage Location', 'Product Owner', 'Moved to storage location', 'Moved to product owner', 'Team Member', 'Product total after', 'Note', 'Edited']];
       const all = [];
       for (const p of products) {
         let run = 0;
@@ -1341,7 +1518,7 @@
           </select></label>
         <div class="field"><span>What to export</span>
           <label class="radio"><input type="radio" name="which" value="both" checked><span><b>Stock and History</b> (2 files)</span></label>
-          <label class="radio"><input type="radio" name="which" value="stock"><span><b>Stock list</b>: what's in stock now, one row per location and owner</span></label>
+          <label class="radio"><input type="radio" name="which" value="stock"><span><b>Stock list</b>: what's in stock now, one row per storage location and product owner</span></label>
           <label class="radio"><input type="radio" name="which" value="history"><span><b>History</b>: every add, remove, move and count, with notes</span></label>
         </div>
         <div class="actions"><button type="button" class="btn" data-a="no">Cancel</button><button class="btn primary">Create</button></div>
@@ -1366,24 +1543,24 @@
 
   // ---------- people (1.6) ----------
   async function viewPeople() {
-    setChrome({ title: 'People', back: '#/settings' });
+    setChrome({ title: 'Team Members', back: '#/settings' });
     const people = await DB.listPeople();
     const frag = h(`<div>
-      <p class="desc">Names to pick under <b>Who</b> when you add, remove, move or count stock. Reports show how much each person added and used. This list is for the whole app, not one project.</p>
+      <p class="desc">Names to pick under <b>Team Member</b> when you add, remove, move or count stock. Reports show how much each team member added and used. This list is for the whole app, not one project.</p>
       ${people.length ? `<div class="card namelist">${people.map((n, i) => `
         <div class="name-row"><span class="grow">${esc(n)}</span>
           <button class="link-btn" data-i="${i}" data-a="ren">Rename</button>
           <button class="link-btn danger" data-i="${i}" data-a="rm">Remove</button></div>`).join('')}</div>`
-      : `<div class="card banner">No names yet. Add one here, or choose <b>+ New person…</b> on the Add or Remove form.</div>`}
-      <button class="btn wide" data-a="add">+ Add person</button>
+      : `<div class="card banner">No names yet. Add one here, or choose <b>+ New team member…</b> on the Add or Remove form.</div>`}
+      <button class="btn wide" data-a="add">+ Add team member</button>
     </div>`);
     frag.querySelectorAll('[data-a]').forEach(b => b.onclick = async () => {
       const name = people[+b.dataset.i];
       if (b.dataset.a === 'add') {
-        const v = await textSheet('New person', { placeholder: 'Name, e.g. Sam R.', label: 'Add' });
+        const v = await textSheet('New team member', { placeholder: 'Name, e.g. Sam R.', label: 'Add' });
         if (v) { await DB.addPerson(v); render(); }
       } else if (b.dataset.a === 'ren') {
-        const v = await textSheet('Rename person', { value: name });
+        const v = await textSheet('Rename team member', { value: name });
         if (v && v !== name) {
           await DB.renamePerson(name, v);
           if (lastPerson.get() === name) lastPerson.set(v);
@@ -1550,8 +1727,8 @@
       <select class="input" name="${name}"><option value="${ALL}" ${cur === ALL ? 'selected' : ''}>All</option>${inner}</select></label>`;
     const projLabel = st.proj ? r.pName[st.proj] : 'All projects';
     const filterBits = [
-      st.loc !== ALL && `Location: ${st.loc || NOT_SET}`, st.own !== ALL && `Owner: ${st.own || NOT_SET}`,
-      st.who !== ALL && `Who: ${st.who || NOT_SET}`, st.prod !== ALL && `Product: ${productName(r.pById[st.prod] || {})}`,
+      st.loc !== ALL && `Storage Location: ${st.loc || NOT_SET}`, st.own !== ALL && `Product Owner: ${st.own || NOT_SET}`,
+      st.who !== ALL && `Team Member: ${st.who || NOT_SET}`, st.prod !== ALL && `Product: ${productName(r.pById[st.prod] || {})}`,
     ].filter(Boolean);
     const showStock = st.who === ALL;
     const t = r.total;
@@ -1574,9 +1751,9 @@
         </div>
         <details class="more-filters" ${filterBits.length ? 'open' : ''}>
           <summary>Filters${filterBits.length ? ` (${filterBits.length})` : ''}</summary>
-          ${sel('loc', 'Location', opts(r.lists.locations, st.loc), st.loc)}
-          ${sel('own', 'Owner', opts(r.lists.owners, st.own), st.own)}
-          ${sel('who', 'Who', opts(r.lists.people, st.who), st.who)}
+          ${sel('loc', 'Storage Location', opts(r.lists.locations, st.loc), st.loc)}
+          ${sel('own', 'Product Owner', opts(r.lists.owners, st.own), st.own)}
+          ${sel('who', 'Team Member', opts(r.lists.people, st.who), st.who)}
           ${sel('prod', 'Product', r.allProducts.map(p => `<option value="${esc(p.id)}" ${st.prod === p.id ? 'selected' : ''}>${esc(productName(p))}${many ? ` (${esc(r.pName[p.projectId])})` : ''}</option>`).join(''), st.prod)}
           ${filterBits.length ? `<button type="button" class="link-btn" data-a="clear">Clear filters</button>` : ''}
         </details>
@@ -1611,19 +1788,19 @@
         ${extrasHtml(t)}
         <div class="rg-extra">${nEntries(t.entries)} · ${plural(r.byProd.length, 'product')}</div>
       </div>
-      ${showStock ? '' : `<p class="hint">Start and end stock are left out while a person is picked, because stock isn't owned by a person.</p>`}
+      ${showStock ? '' : `<p class="hint">Start and end stock are left out while a team member is picked, because stock isn't owned by a team member.</p>`}
 
       ${t.entries || r.byProd.length ? `
       <h2 class="section">By product</h2>
       <div class="list">${r.byProd.map(([p, a]) => groupHtml(prodName(p), a, { showStock, sub: many ? esc(r.pName[p.projectId]) : '', last: true })).join('')}</div>
 
-      <h2 class="section">By location</h2>
+      <h2 class="section">By storage location</h2>
       <div class="list">${r.byLoc.map(([n, a]) => groupHtml(nameHtml(n), a, { showStock, split: true })).join('')}</div>
 
-      <h2 class="section">By owner</h2>
+      <h2 class="section">By product owner</h2>
       <div class="list">${r.byOwn.map(([n, a]) => groupHtml(nameHtml(n), a, { showStock, split: true })).join('')}</div>
 
-      <h2 class="section">By person</h2>
+      <h2 class="section">By team member</h2>
       ${r.byWho.length ? `<div class="list">${r.byWho.map(([n, a]) => groupHtml(nameHtml(n), a, { showStock: false, sub: nEntries(a.entries) })).join('')}</div>`
         : `<div class="card banner">No entries in these dates.</div>`}
 
@@ -1695,12 +1872,12 @@
       head,
       row('Totals', 'All', projLabel, r.total),
       ...r.byProd.map(([p, a]) => row('Product', [p.partNumber, p.description].filter(Boolean).join(' · ') || 'Untitled', r.pName[p.projectId], a)),
-      ...r.byLoc.map(([n, a]) => row('Location', orName(n), '', a)),
-      ...r.byOwn.map(([n, a]) => row('Owner', orName(n), '', a)),
-      ...r.byWho.map(([n, a]) => row('Person', orName(n), '', { ...a, start: '', end: '' })),
+      ...r.byLoc.map(([n, a]) => row('Storage Location', orName(n), '', a)),
+      ...r.byOwn.map(([n, a]) => row('Product Owner', orName(n), '', a)),
+      ...r.byWho.map(([n, a]) => row('Team Member', orName(n), '', { ...a, start: '', end: '' })),
       ...r.byNote.map(([n, a]) => row('Note', n, '', { ...a, start: '', end: '' })),
     ];
-    const ent = [['Date', 'Time', 'Project', 'Part number', 'Description', 'Type', 'Quantity', 'Location', 'Owner', 'Moved to location', 'Moved to owner', 'Who', 'Note', 'Edited']];
+    const ent = [['Date', 'Time', 'Project', 'Part number', 'Description', 'Type', 'Quantity', 'Storage Location', 'Product Owner', 'Moved to storage location', 'Moved to product owner', 'Team Member', 'Note', 'Edited']];
     for (const m of r.entries.slice().reverse()) {
       const p = r.pById[m.productId], d = new Date(m.at), mv = m.kind === 'move';
       ent.push([toDateInput(d), m.dateOnly ? '' : hhmm(d), r.pName[m.projectId], p.partNumber || '', p.description || '', kindWord(m),
@@ -1742,10 +1919,10 @@
     const safe = await DB.beforeRestore().catch(() => null);
     const people = await DB.listPeople().catch(() => []);
     const frag = h(`<div>
-      <h2 class="section">Team</h2>
+      <h2 class="section">Team Members</h2>
       <div class="list">
         <a class="card row" href="#/settings/people">
-          <div class="grow"><div class="t">People</div><div class="s">${people.length ? `${esc(people.slice(0, 3).join(', '))}${people.length > 3 ? ` and ${people.length - 3} more` : ''}` : 'Names to pick under Who on Add, Remove and Move'}</div></div>${ICON.chev}
+          <div class="grow"><div class="t">Team Member list</div><div class="s">${people.length ? `${esc(people.slice(0, 3).join(', '))}${people.length > 3 ? ` and ${people.length - 3} more` : ''}` : 'Names to pick under Team Member on Add, Remove and Move'}</div></div>${ICON.chev}
         </a>
       </div>
       <h2 class="section">Backup and export</h2>
@@ -1760,10 +1937,10 @@
           <div class="grow"><div class="t">Undo last ${safeWord(safe)}</div><div class="s">Put back the data from before the ${safeWord(safe)} on ${esc(fmtStamp(safe.savedAt))}</div></div>${ICON.chev}
         </button>` : ''}
         <button class="card row" data-a="csv">
-          <div class="grow"><div class="t">Export to spreadsheet (CSV)</div><div class="s">Stock and History for one project or all, with locations and owners</div></div>${ICON.chev}
+          <div class="grow"><div class="t">Export to spreadsheet (CSV)</div><div class="s">Stock and History for one project or all, with storage locations and product owners</div></div>${ICON.chev}
         </button>
         <label class="card row switch-row">
-          <div class="grow"><div class="t">Backup reminder</div><div class="s">Remind me on the Inventory screen after ${REMIND_DAYS} days without a backup</div></div>
+          <div class="grow"><div class="t">Backup reminder</div><div class="s">Remind me on the Projects screen after ${REMIND_DAYS} days without a backup</div></div>
           <input type="checkbox" class="switch" name="remind" ${backupPrefs.remind() ? 'checked' : ''}>
         </label>
       </div>
@@ -1827,26 +2004,27 @@
   function viewHelp() {
     setChrome({ title: 'Help', back: '#/settings' });
     const topics = [
-      ['Getting around', 'The bar at the bottom of the screen has three tabs: <b>Inventory</b> (your projects and products), <b>Reports</b> and <b>Settings</b>. Tap a tab to switch, or swipe left or right on the Inventory, Reports or Settings screen to move to the next tab. Going back to <b>Inventory</b> takes you to the project or product you had open; tap <b>Inventory</b> again for the list of projects. The tabs hide while you fill in a product form.'],
-      ['Projects', 'Each project keeps its own inventory. On the Inventory screen tap <b>New project</b>. Open a project and tap <b>⋮</b> to rename or delete it.'],
+      ['Getting around', 'The bar at the bottom of the screen has four tabs: <b>Projects</b> (your projects and their products), <b>Inventory</b> (every product from every project in one list), <b>Reports</b> and <b>Settings</b>. Tap a tab to switch, or swipe left or right on the Projects, Inventory, Reports or Settings screen to move to the next tab. Going back to <b>Projects</b> takes you to the project or product you had open; tap <b>Projects</b> again for the list of projects. The tabs hide while you fill in a product form.'],
+      ['Inventory (all projects)', 'The <b>Inventory</b> tab lists every product from every project, including ones with 0 in stock. Products with the same part number in different projects are shown once with the combined total. Search by part number, description or project, tap <b>Filters and sort</b> to look at one project, storage location or product owner or to change the order, or tap <b>Low stock only</b>. Tap a product to see the total, how much is in each project and where, and totals by storage location and product owner. Tap a project there to add, remove or move stock.'],
+      ['Projects', 'Each project keeps its own inventory. On the <b>Projects</b> tab tap <b>New project</b>. Open a project and tap <b>⋮</b> to rename or delete it.'],
       ['Deleting inventory, projects or all data', 'To delete products but keep their project, tap <b>Settings</b> (bottom of the screen) › <b>Delete inventory</b>, tick the products (or <b>Select all</b> under a project) and tap <b>Delete</b>. To delete whole projects, tap <b>Delete projects</b>, tick the projects you want gone and tap <b>Delete</b>. To wipe everything, tap <b>Delete all data</b> and type <b>DELETE</b> to confirm. Both offer <b>Back up first</b>. A safety copy is kept, so if it was a mistake, tap <b>Undo</b> straight away or <b>Undo last delete</b> in Settings. Only the last restore or delete can be undone.'],
       ['Adding a product', 'Open a project and tap <b>Add product</b>. Tap the photo box to take a picture, enter the model/part number and a description, set the starting quantity, then tap <b>Add product</b>.'],
       ['Photos', 'Tap the photo box to use the camera, or <b>Choose from library</b> for a saved picture. To change a photo later, open the product, tap <b>⋮</b> › <b>Edit product</b>.'],
-      ['Adding and removing stock', 'Tap a product to open it, then tap <b>+ Add</b> or <b>− Remove</b>. Pick the date (today is filled in), enter the quantity and, if you like, a note such as "10 for sections 15A". Add asks for the location and owner. Remove asks where the stock comes from and won\'t let you take more than that spot holds. The form shows the stock there and the total after the change. Notes you used recently appear under the note box: tap one to reuse it. Right after saving, tap <b>Undo</b> at the bottom if it was a mistake.'],
-      ['Locations and owners', 'Stock is counted separately for each location (for example Bin A, Truck) and owner. The product page shows the total and how much is at each one. In the Add form, pick a location and owner, or choose <b>+ New location…</b> / <b>+ New owner…</b> to type a new one. To rename or remove names, open the project and tap <b>⋮</b> › <b>Locations and owners</b>. Renaming updates every entry in the project.'],
-      ['Who (people)', 'Add, Remove, Move and Correct stock count ask <b>Who</b> is doing it. Pick a name, or choose <b>+ New person…</b> to type one. The last name you picked is filled in next time. To rename or remove names, tap <b>Settings</b> (bottom of the screen) › <b>People</b>. Renaming changes the name on every entry. Entries from before version 1.6 show Who as <b>Not set</b>; tap one in History and <b>Edit</b> it to fill it in.'],
-      ['Reports', 'Tap the <b>Reports</b> tab at the bottom of the screen, or open a project and tap <b>⋮</b> › <b>Reports</b>. Pick a project or All projects and the dates (This week, Last week, This month, Last month, Last 30 days, or type your own). Tap <b>Filters</b> to look at one location, owner, person or product. The report shows the totals added and used, then the same per product (with stock at the start and end, and when it was last used), per location, per owner, per person and per note, then every entry with its date, who and note. Tap <b>Preview report</b> to see it exactly as the PDF will look, then <b>Print / save PDF</b> or <b>Close</b>. Tap <b>Print / save PDF</b> to print it or save it as a PDF (on iPhone, tap the Share button on the print screen), or <b>Share spreadsheet</b> for CSV files.'],
-      ['Moving stock', 'To move stock between locations or owners (for example from Bin A to the truck), open the product and tap <b>⇄ Move</b>. Pick where it comes from, where it goes, and how many. The total stays the same and History shows one "Moved" entry.'],
+      ['Adding and removing stock', 'Tap a product to open it, then tap <b>+ Add</b> or <b>− Remove</b>. Pick the date (today is filled in), enter the quantity and, if you like, a note such as "10 for sections 15A". Add asks for the storage location and product owner. Remove asks where the stock comes from and won\'t let you take more than that spot holds. The form shows the stock there and the total after the change. Notes you used recently appear under the note box: tap one to reuse it. Right after saving, tap <b>Undo</b> at the bottom if it was a mistake.'],
+      ['Storage locations and product owners', 'Stock is counted separately for each storage location (for example Bin A, Truck) and product owner. The product page shows the total and how much is at each one. In the Add form, pick a storage location and product owner, or choose <b>+ New storage location…</b> / <b>+ New product owner…</b> to type a new one. To rename or remove names, open the project and tap <b>⋮</b> › <b>Storage locations and product owners</b>. Renaming updates every entry in the project.'],
+      ['Team members', 'Add, Remove, Move and Correct stock count ask which <b>Team Member</b> is doing it. Pick a name, or choose <b>+ New team member…</b> to type one. The last name you picked is filled in next time. To rename or remove names, tap <b>Settings</b> (bottom of the screen) › <b>Team Member list</b>. Renaming changes the name on every entry. Entries from before version 1.6 show Team Member as <b>Not set</b>; tap one in History and <b>Edit</b> it to fill it in.'],
+      ['Reports', 'Tap the <b>Reports</b> tab at the bottom of the screen, or open a project and tap <b>⋮</b> › <b>Reports</b>. Pick a project or All projects and the dates (This week, Last week, This month, Last month, Last 30 days, or type your own). Tap <b>Filters</b> to look at one storage location, product owner, team member or product. The report shows the totals added and used, then the same per product (with stock at the start and end, and when it was last used), per storage location, per product owner, per team member and per note, then every entry with its date, team member and note. Tap <b>Preview report</b> to see it exactly as the PDF will look, then <b>Print / save PDF</b> or <b>Close</b>. Tap <b>Print / save PDF</b> to print it or save it as a PDF (on iPhone, tap the Share button on the print screen), or <b>Share spreadsheet</b> for CSV files.'],
+      ['Moving stock', 'To move stock between storage locations or product owners (for example from Bin A to the truck), open the product and tap <b>⇄ Move</b>. Pick where it comes from, where it goes, and how many. The total stays the same and History shows one "Moved" entry.'],
       ['Low-stock warning', 'When adding a product, when adding or removing stock, or with <b>⋮</b> › <b>Edit product</b>, fill in <b>Low-stock warning</b>. When the total in stock is at or below that number, the product shows a red <b>Low</b> tag, the project shows how many items are low, and <b>Low stock only</b> above the product list shows just those.'],
-      ['History', "Open a product to see every change, newest first: the date, whether it was added, removed or moved, the quantity, the location and owner, the total before → after, and the note."],
-      ['Fixing a History entry', 'Tap an entry in History to see its details. Tap <b>Edit</b> to change the date, quantity, location, owner or note: the stock adjusts to match, and the entry is marked <b>edited</b> with a record of what it was before. Tap <b>Delete</b> to remove the entry and put the stock back.'],
-      ['Correcting a count', 'If the count on the shelf is different, open the product, tap <b>⋮</b> › <b>Correct stock count</b>, pick the location and owner, and enter the real number there. The difference is saved in History as a "count" entry.'],
-      ['“Not set”', 'Stock recorded before version 1.3 has no location or owner, so it shows as <b>Not set</b>. To sort it out, use <b>⇄ Move</b> to move it to the right location and owner, or tap an old History entry and <b>Edit</b> it.'],
+      ['History', "Open a product to see every change, newest first: the date, whether it was added, removed or moved, the quantity, the storage location and product owner, the team member, the total before → after, and the note."],
+      ['Fixing a History entry', 'Tap an entry in History to see its details. Tap <b>Edit</b> to change the date, quantity, storage location, product owner, team member or note: the stock adjusts to match, and the entry is marked <b>edited</b> with a record of what it was before. Tap <b>Delete</b> to remove the entry and put the stock back.'],
+      ['Correcting a count', 'If the count on the shelf is different, open the product, tap <b>⋮</b> › <b>Correct stock count</b>, pick the storage location and product owner, and enter the real number there. The difference is saved in History as a "count" entry.'],
+      ['“Not set”', 'Stock recorded before version 1.3 has no storage location or product owner, so it shows as <b>Not set</b>. To sort it out, use <b>⇄ Move</b> to move it to the right storage location and product owner, or tap an old History entry and <b>Edit</b> it.'],
       ['Searching', 'Inside a project, type in the search box to find products by part number or description.'],
       ['Updates', "The app checks for updates whenever you open it. When one arrives, it refreshes once by itself and shows <b>What's New</b>. Your data is not affected. You can see the version and build here in Settings."],
-      ['Backing up', 'Your inventory is stored only on this phone, so make a backup now and then. Tap <b>Settings</b> (bottom of the screen) › <b>Back up now</b>. When the backup is ready, tap <b>Share or save…</b> and pick where it goes, for example Google Drive, Files, or an email to yourself. Or tap <b>Save to phone</b> to put it in Downloads. The file holds every project, product, photo, location, owner and History entry. Settings shows when you last backed up, and the Inventory screen reminds you after 7 days (turn this off with <b>Backup reminder</b>).'],
+      ['Backing up', 'Your inventory is stored only on this phone, so make a backup now and then. Tap <b>Settings</b> (bottom of the screen) › <b>Back up now</b>. When the backup is ready, tap <b>Share or save…</b> and pick where it goes, for example Google Drive, Files, or an email to yourself. Or tap <b>Save to phone</b> to put it in Downloads. The file holds every project, product, photo, storage location, product owner, team member and History entry. Settings shows when you last backed up, and the Projects screen reminds you after 7 days (turn this off with <b>Backup reminder</b>).'],
       ['Restoring a backup', 'Tap <b>Settings</b> (bottom of the screen) › <b>Restore from backup</b> and pick the backup file. The app shows what is in it before anything changes. Tap <b>Replace</b> to swap everything on this phone for the backup. A safety copy of what was there is kept: if you restored the wrong file, tap <b>Undo last restore</b> in Settings.'],
-      ['Exporting to a spreadsheet', 'Tap <b>Settings</b> (bottom of the screen) › <b>Export to spreadsheet (CSV)</b>, or open a project and tap <b>⋮</b> › <b>Export to spreadsheet (CSV)</b>. Pick a project or All projects, and what to export: the <b>Stock list</b> (one row per product, location and owner) and/or <b>History</b> (every add, remove, move and count with its date and note). The files open in Excel, Google Sheets or Numbers.'],
+      ['Exporting to a spreadsheet', 'Tap <b>Settings</b> (bottom of the screen) › <b>Export to spreadsheet (CSV)</b>, or open a project and tap <b>⋮</b> › <b>Export to spreadsheet (CSV)</b>. Pick a project or All projects, and what to export: the <b>Stock list</b> (one row per product, storage location and product owner) and/or <b>History</b> (every add, remove, move and count with its date and note). The files open in Excel, Google Sheets or Numbers.'],
       ['Your data', 'Everything is stored only on this phone, and nothing is sent anywhere unless you share a backup or export file yourself. Deleting the app or clearing the browser data for this site erases it, so keep a recent backup.'],
     ];
     return h(`<div class="help">${topics.map(([t, b]) => `
@@ -1894,14 +2072,16 @@
   }
 
   // ---------- tabs (1.8) ----------
-  // Three top-level tabs. Switching tabs replaces the history entry instead of
-  // adding one, so the ‹ back button inside a project still goes to the parent
-  // screen. Inventory remembers the project or product you had open.
-  const TABS = ['inv', 'rep', 'set'];
-  const TAB_ROOT = { inv: '#/', rep: '#/reports', set: '#/settings' };
+  // Four top-level tabs (1.9: Projects, Inventory, Reports, Settings). 'inv' is the
+  // Projects tab (it was called Inventory in 1.8); 'all' is the all-projects Inventory.
+  // Switching tabs replaces the history entry instead of adding one, so the ‹ back
+  // button inside a project still goes to the parent screen. Projects remembers the
+  // project or product you had open.
+  const TABS = ['inv', 'all', 'rep', 'set'];
+  const TAB_ROOT = { inv: '#/', all: '#/inventory', rep: '#/reports', set: '#/settings' };
   const curHash = () => location.hash || '#/';
-  const tabOf = (hash) => /^#\/reports/.test(hash) ? 'rep' : /^#\/settings/.test(hash) ? 'set' : 'inv';
-  const isTabRoot = (hash) => /^(#\/?)?$/.test(hash) || hash === '#/reports' || hash === '#/settings';
+  const tabOf = (hash) => /^#\/inventory/.test(hash) ? 'all' : /^#\/reports/.test(hash) ? 'rep' : /^#\/settings/.test(hash) ? 'set' : 'inv';
+  const isTabRoot = (hash) => /^(#\/?)?$/.test(hash) || hash === '#/inventory' || hash === '#/reports' || hash === '#/settings';
   // forms and the delete screens have their own bottom buttons, so no tab bar there
   const noTabs = (hash) => /^#\/(p\/[^/]+\/new|i\/[^/]+\/edit|settings\/delete)/.test(hash);
   let slideDir = 0;
@@ -1978,6 +2158,8 @@
       else if (parts[0] === 'i' && parts[1]) node = await viewProduct(parts[1]);
       else if (parts[0] === 'settings' && parts[1] === 'new') node = viewWhatsNew();
       else if (parts[0] === 'settings' && parts[1] === 'help') node = viewHelp();
+      else if (parts[0] === 'inventory' && parts[1]) node = await viewInventoryItem(decodeURIComponent(parts[1]));
+      else if (parts[0] === 'inventory') node = await viewInventory();
       else if (parts[0] === 'reports') node = await viewReports();
       else if (parts[0] === 'settings' && parts[1] === 'people') node = await viewPeople();
       else if (parts[0] === 'settings' && parts[1] === 'delete-items') node = await viewDeleteItems();

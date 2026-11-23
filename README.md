@@ -5,9 +5,17 @@ A phone-first inventory tracker that works offline and installs to your home scr
 **Open the app:** https://swiftcoyote.github.io/Simple-Inventory/
 (on your phone, use the browser's *Add to Home Screen* to install it).
 
-- **Tabs**: a bottom tab bar switches between Inventory, Reports and Settings. Swipe left/right
-  on those three screens to change tab (not inside projects, not from the screen edges).
-  Tab switches replace the history entry, and Inventory reopens the last project/product.
+- **Tabs** (1.9): a bottom tab bar switches between Projects, Inventory, Reports and Settings.
+  Swipe left/right on those four screens to change tab (not inside projects, not from the
+  screen edges). Tab switches replace the history entry, and Projects reopens the last
+  project/product.
+- **Inventory tab** (1.9, `#/inventory`): every product from every project in one list. Products
+  that share a part number (case-insensitive) are one item with a combined total. Search, filter
+  by project / storage location / product owner, sort, Low stock only. `#/inventory/<key>`
+  shows the total, per-project stock (tap through to the project's product page) and totals by
+  storage location and product owner.
+- **Names on screen** (1.9): Location is shown as "Storage Location", Owner as "Product Owner",
+  Who/People as "Team Member(s)". Stored field names (`location`, `owner`, `person`) are unchanged.
 - **Projects** keep inventory separate per job.
 - **Products** have a photo, model/part number, description and stock count.
 - **Add / Remove** on the product page logs each change with a date (defaults to today),

@@ -4,6 +4,20 @@
  * to match (e.g. '1.1-build2'). Builds count up and never reset. */
 window.CHANGELOG = [
   {
+    version: '1.9', build: 10, date: '2026-11-23',
+    title: 'New Inventory tab and clearer names',
+    changes: [
+      'The tab that lists your projects is now called Projects. A new Inventory tab next to it shows every product from every project in one list.',
+      'Each product in Inventory shows its photo, part number, description, which project (or how many projects) it is in, how many storage locations it is in, and the total in stock. Products with 0 in stock are shown too.',
+      'Products with the same part number in different projects are shown once, with the combined total.',
+      'Search Inventory by part number, description or project. Tap Filters and sort to look at one project, storage location or product owner, and to sort by part number, description or lowest stock first. Low stock only shows just the products that are low.',
+      'Tap a product in Inventory to see the total in stock, how many projects and storage locations it is in, how much is in each project (and where), and totals by storage location and by product owner. Tap a project there to add, remove or move stock and see its History.',
+      'New names: Location is now Storage Location, Owner is now Product Owner, and Who is now Team Member. This is on every form, in History, in Reports and in the spreadsheet (CSV) column headers.',
+      'Settings: the Team section and the People list are now Team Members. The project menu item is now Storage locations and product owners.',
+      'Only the words on screen changed. Your saved products, History, names and backups are exactly as they were.',
+    ],
+  },
+  {
     version: '1.8', build: 9, date: '2026-11-22',
     title: 'New layout with tabs',
     changes: [
