@@ -2,7 +2,7 @@
  * Bump VERSION whenever any app file changes so phones pick up the update.
  * Files are fetched with cache:'reload' so a new version never picks up stale
  * copies from the browser's HTTP cache (GitHub Pages caches files for 10 min). */
-const VERSION = '1.18-build21';
+const VERSION = '1.19-build22';
 const CACHE = `inventory-${VERSION}`;
 // Barcode and text-reader files (1.15, about 11 MB) are only fetched when first used, and
 // kept in their own cache that app updates don't clear, so they download just once.

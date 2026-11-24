@@ -1144,6 +1144,7 @@ export default {
         <div class="summary-row">
           <div class="summary">${plural(products.length, 'product')} · ${plural(units, 'unit')} in stock</div>
           ${lowCount ? `<button class="filter ${lowOnly ? 'on' : ''}" id="lowOnly" aria-pressed="${lowOnly}">Low stock only (${lowCount})</button>` : ''}
+          ${viewSwitchHtml()}
         </div>
         <div class="list" id="plist"></div>`
       : `<div class="empty">${ICON.camera}<b>No products yet</b>Tap <i>Add inventory</i> to snap a photo and record a part.</div>`}
@@ -1156,14 +1157,14 @@ export default {
       const q = searchTerm.trim().toLowerCase();
       let shown = q ? products.filter(p => `${p.partNumber} ${p.description}`.toLowerCase().includes(q)) : products;
       if (lowOnly) shown = shown.filter(DB.isLow);
-      list.replaceChildren(h(shown.length ? shown.map(p => `
-        <a class="card row" href="#/i/${p.id}">
-          ${p.photo ? `<img class="thumb" alt="" src="${blobUrl(p.photo)}">` : `<div class="thumb">${ICON.box}</div>`}
-          <div class="grow"><div class="t">${esc(p.partNumber || '—')}${DB.isLow(p) ? ' <span class="tag low">Low</span>' : ''}</div><div class="s">${esc(p.description)}</div></div>
-          <div class="count ${p.stock ? '' : 'zero'} ${DB.isLow(p) ? 'low' : ''}"><span class="n">${p.stock}</span><span class="l">in stock</span></div>
-        </a>`).join('') : `<div class="empty">${q ? `No matches for “${esc(searchTerm)}”${lowOnly ? ' in low stock' : ''}.` : 'No low-stock products.'}</div>`));
+      const view = listView();
+      list.className = `list view-${view}`;
+      list.replaceChildren(h(shown.length ? shown.map(p => productItemHtml({ href: `#/i/${p.id}`, peek: p.id, photo: p.photo, pn: p.partNumber,
+          low: DB.isLow(p), desc: p.description, qty: p.stock, unit: 'in stock', lowCls: DB.isLow(p) ? 'low' : '' }, view)).join('') : `<div class="empty">${q ? `No matches for “${esc(searchTerm)}”${lowOnly ? ' in low stock' : ''}.` : 'No low-stock products.'}</div>`));
     };
     drawList();
+    wireViewSwitch(frag, list, drawList);
+    wirePeek(list, (pid) => productPhotos(products.find(p => p.id === pid) || {}));
 
     const s = frag.querySelector('.search');
     if (s) s.oninput = () => { searchTerm = s.value; drawList(); };
@@ -1554,6 +1555,66 @@ export default {
     <thead><tr><th>Storage Location</th><th>Product Owner</th><th class="n">Qty</th></tr></thead>
     <tbody>${sortPlaces(places).map(b => `<tr><td>${ICO_PIN}${nameHtml(b.location)}</td><td>${ICO_USER}${nameHtml(b.owner)}</td><td class="n">${b.qty}</td></tr>`).join('')}</tbody></table>`;
 
+  // ---------- 1.19: product list views (List / Big photos / Grid) ----------
+  const VIEWS = [
+    ['list', 'List', '<svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><path d="M9 6h11M9 12h11M9 18h11M4 6h1M4 12h1M4 18h1"/></svg>'],
+    ['big', 'Big photos', '<svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"><rect x="3" y="4" width="8" height="7" rx="1.5"/><rect x="3" y="13" width="8" height="7" rx="1.5"/><path d="M14 7h7M14 16h7" stroke-linecap="round"/></svg>'],
+    ['grid', 'Grid', '<svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"><rect x="3" y="3" width="8" height="8" rx="1.5"/><rect x="13" y="3" width="8" height="8" rx="1.5"/><rect x="3" y="13" width="8" height="8" rx="1.5"/><rect x="13" y="13" width="8" height="8" rx="1.5"/></svg>'],
+  ];
+  const listView = () => { const v = ls.get('listView'); return VIEWS.some(x => x[0] === v) ? v : 'big'; };
+  const viewSwitchHtml = () => `<div class="view-switch" role="group" aria-label="How to show products">${VIEWS.map(([v, l, ico]) =>
+    `<button type="button" data-view="${v}" aria-label="${l}" title="${l}" aria-pressed="${listView() === v}" class="${listView() === v ? 'on' : ''}">${ico}</button>`).join('')}</div>`;
+  /** Wires the switch; redraw() repaints the list in the new view. */
+  function wireViewSwitch(frag, list, redraw) {
+    const sw = frag.querySelector('.view-switch');
+    if (!sw) return;
+    sw.querySelectorAll('button').forEach(b => b.onclick = () => {
+      ls.set('listView', b.dataset.view);
+      sw.querySelectorAll('button').forEach(x => { const on = x === b; x.classList.toggle('on', on); x.setAttribute('aria-pressed', on); });
+      redraw();
+    });
+  }
+  /** Press and hold a product's photo in a list to see its photos full screen without
+   *  opening the product. photosOf(peek) gives the photos for an item's data-peek key. */
+  function wirePeek(list, photosOf) {
+    if (!list) return;
+    let t = 0, start = null, fired = false;
+    const cancel = () => { clearTimeout(t); start = null; };
+    list.addEventListener('pointerdown', (e) => {
+      const th = e.target.closest('img.thumb');
+      const a = th?.closest('[data-peek]');
+      fired = false;
+      if (!a) return;
+      start = { x: e.clientX, y: e.clientY };
+      t = setTimeout(() => {
+        start = null;
+        const photos = photosOf(a.dataset.peek).filter(Boolean);
+        if (!photos.length) return;
+        fired = true;
+        navigator.vibrate?.(15);
+        photoViewer(photos.map((photo, i) => ({ photo, label: i ? `Photo ${i + 1}` : 'Main photo' })), 0);
+      }, 450);
+    });
+    list.addEventListener('pointermove', (e) => { if (start && Math.hypot(e.clientX - start.x, e.clientY - start.y) > 10) cancel(); });
+    list.addEventListener('pointerup', cancel);
+    list.addEventListener('pointercancel', cancel);
+    list.addEventListener('contextmenu', (e) => { if (e.target.closest('img.thumb')) e.preventDefault(); });
+    // The tap that ends a press-and-hold must not also open the product.
+    list.addEventListener('click', (e) => { if (fired) { e.preventDefault(); e.stopPropagation(); fired = false; } }, true);
+  }
+  /** One product in the current view. r: { href, photo, pn, low, desc, sub, qty, unit, lowCls, peek } */
+  function productItemHtml(r, view) {
+    const thumb = r.photo ? `<img class="thumb" alt="" loading="lazy" src="${blobUrl(r.photo)}">` : `<div class="thumb">${ICON.box}</div>`;
+    const count = `<div class="count ${r.qty ? '' : 'zero'} ${r.lowCls || ''}"><span class="n">${r.qty}</span><span class="l">${r.unit}</span></div>`;
+    const lowTag = r.low ? ' <span class="tag low">Low</span>' : '';
+    if (view === 'grid') return `<a class="card gcard" href="${r.href}" data-peek="${esc(r.peek)}">
+        <div class="gphoto">${thumb}<span class="gqty ${r.qty ? '' : 'zero'}">${r.qty}</span>${r.low ? '<span class="tag low">Low</span>' : ''}</div>
+        <div class="gtext"><div class="t">${esc(r.pn || '—')}</div><div class="s">${esc(r.desc)}</div></div></a>`;
+    return `<a class="card row" href="${r.href}" data-peek="${esc(r.peek)}">${thumb}
+        <div class="grow"><div class="t">${esc(r.pn || '—')}${lowTag}</div><div class="s">${esc(r.desc)}</div>${r.sub ? `<div class="s inv-where">${r.sub}</div>` : ''}</div>
+        ${count}</a>`;
+  }
+
   function galleryHtml(photos) {
     if (!photos.length) return `<div class="hero">${ICON.camera}</div>`;
     const many = photos.length > 1;
@@ -1805,6 +1866,7 @@ export default {
         <div class="summary-row">
           <div class="summary" id="invSum"></div>
           ${lowCount ? `<button class="filter ${st.low ? 'on' : ''}" id="lowOnly" aria-pressed="${st.low}">Low stock only (${lowCount})</button>` : ''}
+          ${viewSwitchHtml()}
         </div>
         <div class="list" id="ilist"></div>`
       : `<div class="empty">${ICON.box}<b>No products yet</b>Tap <i>Add inventory</i> to add your first product. Products from every project show up here, all in one list.</div>`}
@@ -1835,21 +1897,21 @@ export default {
       shown.sort(cmp);
       const units = shown.reduce((a, s) => a + s.qty, 0);
       sumEl.textContent = `${plural(shown.length, 'product')} · ${plural(units, 'unit')}${st.loc !== ALL || st.own !== ALL ? ' there' : ' in stock'}`;
+      const view = listView();
+      list.className = `list view-${view}`;
       list.replaceChildren(h(shown.length ? shown.map(({ it, rows, qty }) => {
         const projNames = rows.map(r => r.project.name);
         const where = projNames.length === 1 ? esc(projNames[0]) : `${projNames.length} projects`;
         const nLoc = it.locations.size;
-        return `<a class="card row" href="#/inventory/${encodeURIComponent(it.key)}">
-          ${it.photo ? `<img class="thumb" alt="" src="${blobUrl(it.photo)}">` : `<div class="thumb">${ICON.box}</div>`}
-          <div class="grow"><div class="t">${esc(it.partNumber || '—')}${it.low ? ' <span class="tag low">Low</span>' : ''}</div>
-            <div class="s">${esc(it.description)}</div>
-            <div class="s inv-where">${where}${nLoc ? ` · ${plural(nLoc, 'storage location')}` : ''}</div></div>
-          <div class="count ${qty ? '' : 'zero'}"><span class="n">${qty}</span><span class="l">${st.loc !== ALL || st.own !== ALL ? 'there' : 'in stock'}</span></div>
-        </a>`;
+        return productItemHtml({ href: `#/inventory/${encodeURIComponent(it.key)}`, peek: it.key, photo: it.photo, pn: it.partNumber, low: it.low,
+          desc: it.description, sub: `${where}${nLoc ? ` · ${plural(nLoc, 'storage location')}` : ''}`, qty,
+          unit: st.loc !== ALL || st.own !== ALL ? 'there' : 'in stock' }, view);
       }).join('') : `<div class="empty">No products match${q ? ` “${esc(st.q)}”` : ''}${st.low ? ' in low stock' : ''}${nFilters() ? ' with these filters' : ''}.</div>`));
     };
 
     const s = frag.querySelector('.search');
+    wireViewSwitch(frag, list, draw);
+    wirePeek(list, (k) => { const it = items.find(x => x.key === k); return it ? (it.photos || [it.photo]) : []; });
     if (s) s.oninput = () => { st.q = s.value; draw(); };
     // Scan to find (1.15): opens the product with that part number, or offers to add it.
     const sf = frag.getElementById('scanFind');
@@ -2194,42 +2256,171 @@ export default {
     return frag;
   }
 
-  /** Full-screen photos: swipe or tap the arrows to go through them. */
+  /** Full-screen photos (1.19): swipe between photos, pinch or double-tap to zoom, drag
+   *  to look around a zoomed photo, tap once to hide the buttons. The phone's Back button
+   *  closes the viewer instead of leaving the page. */
   function photoViewer(photos, start, { rename, remove } = {}) {
     hideToast();
     let i = start;
+    const many = photos.length > 1;
+    const src = photos.map(p => URL.createObjectURL(p.photo));
     const node = h(`<div class="viewer" role="dialog" aria-modal="true" aria-label="Photo">
       <div class="viewer-top"><span class="viewer-label"></span><button class="icon-btn" data-a="close" aria-label="Close">✕</button></div>
-      <div class="viewer-img"><img alt=""></div>
-      <button class="viewer-nav prev" aria-label="Previous photo">‹</button><button class="viewer-nav next" aria-label="Next photo">›</button>
+      <div class="viewer-stage"><div class="viewer-track">${src.map(u => `<div class="viewer-slide"><img alt="" draggable="false" src="${u}"></div>`).join('')}</div></div>
+      ${many ? '<button class="viewer-nav prev" aria-label="Previous photo">‹</button><button class="viewer-nav next" aria-label="Next photo">›</button>' : ''}
+      ${many ? `<div class="viewer-thumbs">${src.map((u, k) => `<button type="button" data-k="${k}" aria-label="Photo ${k + 1}"><img alt="" src="${u}"></button>`).join('')}</div>` : ''}
       <div class="viewer-bar"><span class="viewer-n"></span>
         ${rename ? '<button class="link-btn" data-a="ren">Rename</button>' : ''}${remove ? '<button class="link-btn danger" data-a="rm">Delete</button>' : ''}</div>
     </div>`);
     const el = node.firstElementChild;
-    const src = photos.map(p => URL.createObjectURL(p.photo));
-    const img = el.querySelector('img');
-    const draw = () => {
-      img.src = src[i];
-      el.querySelector('.viewer-label').textContent = photos[i].label || 'Photo';
-      el.querySelector('.viewer-n').textContent = `${i + 1} of ${photos.length}`;
-      el.querySelector('.prev').hidden = i === 0;
-      el.querySelector('.next').hidden = i === photos.length - 1;
+    const stage = el.querySelector('.viewer-stage'), track = el.querySelector('.viewer-track');
+    const imgs = [...el.querySelectorAll('.viewer-slide img')];
+    let z = 1, x = 0, y = 0;                 // zoom and pan of the photo on screen
+    const img = () => imgs[i];
+    /** Size of the photo as shown (object-fit: contain) at zoom 1. */
+    const shown = () => {
+      const W = stage.clientWidth, H = stage.clientHeight, im = img();
+      const ar = im.naturalWidth && im.naturalHeight ? im.naturalWidth / im.naturalHeight : W / H;
+      const w = Math.min(W, H * ar);
+      return { W, H, w, h: w / ar };
     };
-    const close = () => { el.remove(); src.forEach(u => URL.revokeObjectURL(u)); };
-    const step = (d) => { const n = i + d; if (n >= 0 && n < photos.length) { i = n; draw(); } };
-    el.querySelector('.prev').onclick = () => step(-1);
-    el.querySelector('.next').onclick = () => step(1);
+    const clampPan = () => {
+      const { W, H, w, h: ht } = shown();
+      const mx = Math.max(0, (w * z - W) / 2), my = Math.max(0, (ht * z - H) / 2);
+      x = Math.max(-mx, Math.min(mx, x)); y = Math.max(-my, Math.min(my, y));
+    };
+    const paint = (anim) => {
+      const im = img();
+      im.style.transition = anim ? 'transform .2s ease-out' : 'none';
+      im.style.transform = `translate(${x}px, ${y}px) scale(${z})`;
+      el.classList.toggle('zoomed', z > 1.01);
+    };
+    const slide = (dx = 0, anim = true) => {
+      track.style.transition = anim ? 'transform .25s ease-out' : 'none';
+      track.style.transform = `translateX(calc(${-i * 100}% + ${dx}px))`;
+    };
+    const resetZoom = (anim) => { z = 1; x = 0; y = 0; paint(anim); };
+    const draw = () => {
+      el.querySelector('.viewer-label').textContent = photos[i].label || 'Photo';
+      el.querySelector('.viewer-n').textContent = many ? `${i + 1} of ${photos.length}` : '';
+      if (many) {
+        el.querySelector('.prev').hidden = i === 0;
+        el.querySelector('.next').hidden = i === photos.length - 1;
+        el.querySelectorAll('.viewer-thumbs button').forEach((t, k) => t.classList.toggle('on', k === i));
+        el.querySelector('.viewer-thumbs .on')?.scrollIntoView?.({ block: 'nearest', inline: 'center' });
+      }
+    };
+    const goTo = (n) => {
+      n = Math.max(0, Math.min(photos.length - 1, n));
+      if (n !== i) { resetZoom(false); i = n; draw(); }
+      slide();
+    };
+
+    let open = true;
+    const teardown = () => {
+      if (!open) return;
+      open = false;
+      window.removeEventListener('popstate', onPop);
+      window.removeEventListener('resize', onResize);
+      el.remove(); src.forEach(u => URL.revokeObjectURL(u));
+    };
+    const onPop = () => teardown();          // phone Back button
+    const onResize = () => { clampPan(); paint(); slide(0, false); };
+    const close = () => { if (!open) return; teardown(); if (history.state?.viewer) history.back(); };
+    history.pushState({ viewer: 1 }, '');
+    window.addEventListener('popstate', onPop);
+    window.addEventListener('resize', onResize);
+
     el.querySelector('[data-a=close]').onclick = close;
+    if (many) {
+      el.querySelector('.prev').onclick = () => goTo(i - 1);
+      el.querySelector('.next').onclick = () => goTo(i + 1);
+      el.querySelectorAll('.viewer-thumbs button').forEach(t => t.onclick = () => goTo(+t.dataset.k));
+    }
     if (rename) el.querySelector('[data-a=ren]').onclick = () => { const p = photos[i]; close(); rename(p); };
     if (remove) el.querySelector('[data-a=rm]').onclick = () => { const p = photos[i]; close(); remove(p); };
-    let sx = null;
-    el.addEventListener('touchstart', (e) => { sx = e.touches.length === 1 ? e.touches[0].clientX : null; }, { passive: true });
-    el.addEventListener('touchend', (e) => {
-      if (sx == null) return;
-      const dx = e.changedTouches[0].clientX - sx; sx = null;
-      if (Math.abs(dx) > 50) step(dx < 0 ? 1 : -1);
-    }, { passive: true });
+
+    // Touch: one finger swipes (or pans when zoomed), two fingers pinch.
+    const pts = new Map();
+    let g = null, lastTap = null, tapTimer = 0;
+    const center = () => { const r = stage.getBoundingClientRect(); return { cx: r.left + r.width / 2, cy: r.top + r.height / 2 }; };
+    const two = () => { const [a, b] = [...pts.values()]; return { d: Math.hypot(a.x - b.x, a.y - b.y) || 1, mx: (a.x + b.x) / 2, my: (a.y + b.y) / 2 }; };
+    const begin = (afterPinch = false) => {
+      if (pts.size >= 2) {
+        const t = two();
+        g = { kind: 'pinch', d0: t.d, z0: z, x0: x, y0: y, mx0: t.mx, my0: t.my };
+      } else if (pts.size === 1) {
+        const p = [...pts.values()][0];
+        g = { kind: 'one', sx: p.x, sy: p.y, x0: x, y0: y, t0: Date.now(), moved: afterPinch };   // the finger left after a pinch is not a tap
+      } else g = null;
+    };
+    /** Zoom to nz keeping the screen point (px, py) still. */
+    const zoomAt = (nz, px, py, fromZ = z, fromX = x, fromY = y) => {
+      const { cx, cy } = center();
+      const ux = (px - cx - fromX) / fromZ, uy = (py - cy - fromY) / fromZ;
+      z = Math.max(1, Math.min(6, nz));
+      x = px - cx - ux * z; y = py - cy - uy * z;
+      clampPan();
+    };
+    stage.addEventListener('pointerdown', (e) => {
+      stage.setPointerCapture?.(e.pointerId);
+      pts.set(e.pointerId, { x: e.clientX, y: e.clientY });
+      begin();
+    });
+    stage.addEventListener('pointermove', (e) => {
+      if (!pts.has(e.pointerId) || !g) return;
+      pts.set(e.pointerId, { x: e.clientX, y: e.clientY });
+      if (g.kind === 'pinch' && pts.size >= 2) {
+        const t = two();
+        zoomAt(g.z0 * t.d / g.d0, t.mx, t.my, g.z0, g.x0 + (t.mx - g.mx0), g.y0 + (t.my - g.my0));
+        paint();
+      } else if (g.kind === 'one') {
+        const dx = e.clientX - g.sx, dy = e.clientY - g.sy;
+        if (Math.hypot(dx, dy) > 8) g.moved = true;
+        if (z > 1.01) { x = g.x0 + dx; y = g.y0 + dy; clampPan(); paint(); }
+        else if (many) {
+          const edge = (i === 0 && dx > 0) || (i === photos.length - 1 && dx < 0);
+          slide(edge ? dx / 3 : dx, false);
+        }
+      }
+    });
+    const end = (e) => {
+      if (!pts.has(e.pointerId)) return;
+      const was = g;
+      pts.delete(e.pointerId);
+      if (was?.kind === 'one') {
+        const dx = e.clientX - was.sx, dt = Date.now() - was.t0;
+        if (z <= 1.01 && many && was.moved) {
+          const fast = Math.abs(dx) > 30 && dt < 300;
+          goTo(Math.abs(dx) > stage.clientWidth / 4 || fast ? i + (dx < 0 ? 1 : -1) : i);
+        } else if (!was.moved && dt < 300 && e.type === 'pointerup') {
+          const now = Date.now();
+          if (lastTap && now - lastTap.t < 320 && Math.hypot(e.clientX - lastTap.x, e.clientY - lastTap.y) < 40) {
+            clearTimeout(tapTimer); lastTap = null;                      // double-tap: zoom in or out
+            if (z > 1.01) resetZoom(true); else { zoomAt(2.5, e.clientX, e.clientY); paint(true); }
+          } else {
+            lastTap = { t: now, x: e.clientX, y: e.clientY };
+            tapTimer = setTimeout(() => { lastTap = null; el.classList.toggle('bare'); }, 320);   // single tap: hide/show buttons
+          }
+        }
+      }
+      if (z < 1.01 && z !== 1) resetZoom(true);
+      begin(was?.kind === 'pinch' || !!was?.moved);   // a finger left a pinch: carry on with the other one
+    };
+    stage.addEventListener('pointerup', end);
+    stage.addEventListener('pointercancel', end);
+    // Mouse wheel / trackpad zoom (for a computer).
+    stage.addEventListener('wheel', (e) => { e.preventDefault(); zoomAt(z * (e.deltaY < 0 ? 1.2 : 1 / 1.2), e.clientX, e.clientY); paint(); }, { passive: false });
+    el.addEventListener('keydown', (e) => {
+      if (e.key === 'Escape') close();
+      else if (e.key === 'ArrowLeft') goTo(i - 1);
+      else if (e.key === 'ArrowRight') goTo(i + 1);
+    });
+    imgs.forEach(im => im.addEventListener('load', () => { if (im === img()) { clampPan(); paint(); } }));
+
     $sheetRoot.replaceChildren(el);
+    el.tabIndex = -1; el.focus({ preventScroll: true });
+    slide(0, false);
     draw();
   }
 
@@ -3483,13 +3674,13 @@ export default {
       ['Projects', 'Each project keeps its own inventory. On the <b>Projects</b> tab tap <b>New project</b>. Open a project and tap <b>⋮</b> to rename or delete it.'],
       ['Deleting inventory, projects or all data', 'To delete products but keep their project, tap <b>Settings</b> (bottom of the screen) › <b>Delete inventory</b>, tick the products (or <b>Select all</b> under a project) and tap <b>Delete</b>. To delete whole projects, tap <b>Delete projects</b>, tick the projects you want gone and tap <b>Delete</b>. To wipe everything, tap <b>Delete all data</b> and type <b>DELETE</b> to confirm. Both offer <b>Back up first</b>. A safety copy is kept, so if it was a mistake, tap <b>Undo</b> straight away or <b>Undo last delete</b> in Settings. Only the last restore or delete can be undone.'],
       ['Adding inventory', 'Tap <b>Add inventory</b> on the <b>Inventory</b> tab, or open a project and tap <b>Add inventory</b> there. From the Inventory tab, pick the <b>Project</b> first. Tap the photo box to take a picture, enter the model/part number and a description, then the quantity, team member, storage location and product owner, and tap <b>Add inventory</b>. If that part number is already in the project, the form says so: tap <b>Open it</b> and use <b>+ Add</b> there instead. If it is in another project, tap <b>Use its description and photos</b> to fill them in.'],
-      ['Photos', 'Tap the photo box to open the camera inside the app. Tap the round button to take the picture, then <b>Use photo</b> or <b>Retake</b>. Tap ⚡ for the flashlight. If the camera won\'t start, tap <b>Use phone camera</b>. Or tap <b>Choose from library</b> for a saved picture. A product can have as many photos as you like: open the product, tap <b>⋮</b> › <b>Edit product and photos</b>, then tap <b>+ Add</b>. The <b>★ main photo</b> is the one shown in lists. Tap a photo there to make it the main photo or remove it. On the product page, swipe the photos left and right and tap one to see it full size.'],
+      ['Photos', 'Tap the photo box to open the camera inside the app. Tap the round button to take the picture, then <b>Use photo</b> or <b>Retake</b>. Tap ⚡ for the flashlight. If the camera won\'t start, tap <b>Use phone camera</b>. Or tap <b>Choose from library</b> for a saved picture. A product can have as many photos as you like: open the product, tap <b>⋮</b> › <b>Edit product and photos</b>, then tap <b>+ Add</b>. The <b>★ main photo</b> is the one shown in lists. Tap a photo there to make it the main photo or remove it. On the product page, swipe the photos left and right and tap one to see it full size. In full size, pinch or double-tap to zoom, swipe to see the next photo, tap once to hide the buttons, and use your phone\'s Back button to close it. In a product list, press and hold a photo to see it full size without opening the product.'],
       ['Scanning barcodes and labels', 'On <b>Add inventory</b> or <b>Edit product</b>, tap <b>Scan</b> in the Model / part number box. In <b>Barcode</b> mode, point at a barcode or QR code: the phone buzzes and the number is filled in. For a label with no barcode, tap <b>Read text</b>, fit the part number inside the box and tap the round button, then tap the right number in the list. Check it matches the label, since letters like O and 0 can get mixed up. To find a product, tap the barcode button in the search box on the <b>Inventory</b> tab or inside a project and scan it. If it isn\'t there yet, tap <b>Add inventory</b> and the number is filled in. All of this works with no internet. Read text downloads its reader (about 6 MB) the first time you use it.'],
       ['Store barcodes (UPC)', 'The number under a store barcode isn\'t the model number, so the app links the barcode to the product instead. The first time, type the model number or use <b>Read text</b>, then add the product. After that, scanning that barcode anywhere fills in the model number, description and photos. To link a barcode to a product you already have, open it › <b>⋮</b> › <b>Edit product and photos</b> › <b>Scan</b>. <b>Look it up online</b> searches UPCitemdb or Google for a new barcode. New barcodes are also looked up online automatically: you see what was found and tap <b>Use this</b>. Only the barcode number is sent. Turn it off or test it in <b>Settings</b> › <b>Online barcode lookup</b>. The free lookup allows about 100 barcodes a day.'],
       ['Adding and removing stock', 'Tap a product to open it, then tap <b>+ Add</b> or <b>− Remove</b>. Pick the date (today is filled in), enter the quantity and, if you like, a note such as "10 for sections 15A". Add asks for the storage location and product owner. Remove asks where the stock comes from and won\'t let you take more than that spot holds. The form shows the stock there and the total after the change. Notes you used recently appear under the note box: tap one to reuse it. Right after saving, tap <b>Undo</b> at the bottom if it was a mistake.'],
       ['Storage locations and product owners', 'Stock is counted separately for each storage location (for example Bin A, Truck) and product owner. The product page shows the total and how much is at each one. In the Add form, pick a storage location and product owner, or choose <b>+ New storage location…</b> / <b>+ New product owner…</b> to type a new one. The names the project already uses show first, under <b>This project</b>. Every project shares one list of each: tap <b>Lists</b> (bottom of the screen). Tap a name there to see what is stored there (or owned), and to rename or remove it with <b>⋮</b>. Renaming updates every project and History.'],
       ['If the app gets closed', 'The Add inventory form saves what you type as you go. If the phone closes the app before you tap <b>Add inventory</b>, open the form again and it is filled back in, photos included. Tap <b>Start over</b> to clear it.'],
-      ['Storage location photos', 'Tap <b>Lists</b> › <b>Storage Locations</b> and tap a location. Tap <b>+ Add photo</b>, take a photo or choose one from your library, then give it a name, like Door or Shelves. Add as many as you like. Tap a photo to see it full size, swipe to see the next one, and use <b>Rename</b> or <b>Delete</b> at the bottom.'],
+      ['Storage location photos', 'Tap <b>Lists</b> › <b>Storage Locations</b> and tap a location. Tap <b>+ Add photo</b>, take a photo or choose one from your library, then give it a name, like Door or Shelves. Add as many as you like. Tap a photo to see it full size, swipe to see the next one, pinch or double-tap to zoom, and use <b>Rename</b> or <b>Delete</b> at the bottom.'],
       ['Project product owners', 'When you create a project, tap the product owners who own the material on it (or type a new one). They show first when you add stock in that project, and if there is only one it is filled in for you. To change them, open the project and tap <b>⋮</b> › <b>Product owners for this project</b>.'],
       ['Team members', 'Add, Remove, Move and Correct stock count ask which <b>Team Member</b> is doing it. Pick a name, or choose <b>+ New team member…</b> to type one. The last name you picked is filled in next time. To rename or remove names, tap <b>Lists</b> (bottom of the screen) › <b>Team Members</b>. Renaming changes the name on every entry. Entries from before version 1.6 show Team Member as <b>Not set</b>; tap one in History and <b>Edit</b> it to fill it in.'],
       ['Reports', 'Tap the <b>Reports</b> tab at the bottom of the screen, or open a project and tap <b>⋮</b> › <b>Reports</b>. Tap one of the big buttons: <b>Stock &amp; reorder</b> (what to reorder, how many you have, and the totals), <b>Monthly use</b> (how much of each product was used each month), <b>Project total</b> (the whole project, from its first entry to today) or <b>Detailed report</b> (everything, including who added or took what, and when). Then pick a project or All projects and the dates. To choose exactly what is in the report, tap <b>What\'s in the report</b> and tick or untick each section: Reorder list, Totals, Stock on hand (tick <b>Added</b>, <b>Used</b> and <b>In stock</b> to pick its columns, and <b>Show storage locations</b> to see where each product is kept), Used each month, and the details: By product, By storage location, By product owner, By team member, By note and Every entry. The app remembers your choice. Tap <b>Filters</b> to look at one storage location, product owner, team member or product. Tap <b>Preview report</b> to see it exactly as the PDF will look, then <b>Print / save PDF</b> or <b>Close</b>. Tap <b>Print / save PDF</b> to print it or save it as a PDF to email (on iPhone, tap the Share button on the print screen), or <b>Share spreadsheet</b> for a CSV file with the same sections.'],
@@ -3499,6 +3690,7 @@ export default {
       ['Fixing a History entry', 'Tap an entry in History to see its details. Tap <b>Edit</b> to change the date, quantity, storage location, product owner, team member or note: the stock adjusts to match, and the entry is marked <b>edited</b> with a record of what it was before. Tap <b>Delete</b> to remove the entry and put the stock back.'],
       ['Correcting a count', 'If the count on the shelf is different, open the product, tap <b>⋮</b> › <b>Correct stock count</b>, pick the storage location and product owner, and enter the real number there. The difference is saved in History as a "count" entry.'],
       ['“Not set”', 'Stock recorded before version 1.3 has no storage location or product owner, so it shows as <b>Not set</b>. To sort it out, use <b>⇄ Move</b> to move it to the right storage location and product owner, or tap an old History entry and <b>Edit</b> it.'],
+      ['Bigger photos in lists', 'Above a product list (on the <b>Inventory</b> tab or inside a project), tap the switch on the right: the first button is <b>List</b> (small photos), the middle one is <b>Big photos</b> and the last one is <b>Grid</b> (2 big photo cards per row, with the count on the photo). The app remembers your choice.'],
       ['Searching', 'Inside a project, type in the search box to find products by part number or description.'],
       ['Updates', "The app checks for updates whenever you open it. When one arrives, it refreshes once by itself and shows <b>What's New</b>. Your data is not affected. You can see the version and build here in Settings."],
       ['Backing up', 'Your inventory is stored only on this phone, so make a backup now and then. Tap <b>Settings</b> (bottom of the screen) › <b>Back up now</b>. When the backup is ready, tap <b>Share or save…</b> and pick where it goes, for example Google Drive, Files, or an email to yourself. Or tap <b>Save to phone</b> to put it in Downloads. The file holds every project, product, photo, storage location, product owner, team member and History entry. Settings shows when you last backed up, and the Projects screen reminds you after 7 days (turn this off with <b>Backup reminder</b>).'],
