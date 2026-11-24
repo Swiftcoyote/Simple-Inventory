@@ -12,7 +12,7 @@ window.CHANGELOG = [
       'Scan to find also works with linked barcodes: scan the box and the product opens.',
       'Already have the product? Open it, tap ⋮ › Edit product and photos › Scan, and scan its barcode to link it. Unlink is there too.',
       'For a barcode the app hasn\'t seen yet, tap Look it up online to search UPCitemdb or Google in your browser.',
-      'Online barcode lookup (Settings › Online barcode lookup): after a one-time setup of a free relay, new barcodes are looked up automatically. You see what was found and tap Use this. Only the barcode number is sent.',
+      'Online barcode lookup: a barcode the app hasn\'t seen yet is looked up automatically in UPCitemdb\'s free product database (through a free public relay, no setup). You see what was found and tap Use this. Only the barcode number is sent. Turn it off or test it in Settings › Online barcode lookup.',
       'Barcodes and QR codes that hold letters, like a part number, still fill in Model / part number directly.',
     ],
   },

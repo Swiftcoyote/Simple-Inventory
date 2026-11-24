@@ -748,21 +748,47 @@ export default {
   },
 };
 `;
-  /** Online lookup through the user's own relay (Settings › Barcode lookup). Returns
-   *  { model, title, brand } or null. Only the barcode number is sent. */
-  async function lookupOnline(code) {
-    const relay = (ls.get('lookupRelay') || '').trim();
-    if (!relay || navigator.onLine === false) return undefined;
+  /** Online barcode lookup (1.16). UPCitemdb's free lookup doesn't let other websites ask
+   *  it directly (CORS), so the request goes through a relay: by default a public free CORS
+   *  relay (no setup; tried in order), or the user's own relay (Settings). Only the barcode
+   *  number is sent. Returns { model, title, brand }, null (not found) or undefined (off /
+   *  no signal); throws { status: 429 } when the daily limit is used up. */
+  const PUBLIC_RELAYS = [
+    (u) => `https://api.allorigins.win/raw?url=${encodeURIComponent(u)}`,
+    (u) => `https://api.codetabs.com/v1/proxy/?quest=${encodeURIComponent(u)}`,
+  ];
+  const lookupPrefs = {
+    on: () => ls.get('lookupOn') !== 'off',
+    own: () => (ls.get('lookupRelay') || '').trim(),
+  };
+  async function lookupVia(url) {
     const ctl = new AbortController(), t = setTimeout(() => ctl.abort(), 12000);
     try {
-      const res = await fetch(`${relay.replace(/\/+$/, '')}/?upc=${encodeURIComponent(code)}`, { signal: ctl.signal, cache: 'no-store' });
-      if (!res.ok) throw Object.assign(new Error(`HTTP ${res.status}`), { status: res.status });
-      const it = (await res.json())?.items?.[0];
+      const res = await fetch(url, { signal: ctl.signal, cache: 'no-store', credentials: 'omit' });
+      const text = await res.text();
+      let data = null;
+      try { data = JSON.parse(text); } catch {}
+      // UPCitemdb answers TOO_FAST / EXCEED_LIMIT when its free daily limit is used up.
+      if (res.status === 429 || /EXCEED_LIMIT|TOO_FAST/.test(data?.code || '')) throw Object.assign(new Error('limit'), { status: 429 });
+      if (!data || (!res.ok && !data.items)) throw Object.assign(new Error(`HTTP ${res.status}`), { status: res.status });
+      const it = data.items?.[0];
       if (!it) return null;
       const model = String(it.model || it.mpn || '').trim();
       const title = String(it.title || '').trim(), brand = String(it.brand || '').trim();
       return (model || title) ? { model, title, brand } : null;
     } finally { clearTimeout(t); }
+  }
+  async function lookupOnline(code, { force = false } = {}) {
+    if ((!force && !lookupPrefs.on()) || navigator.onLine === false) return undefined;
+    const own = lookupPrefs.own();
+    if (own) return lookupVia(`${own.replace(/\/+$/, '')}/?upc=${encodeURIComponent(code)}`);
+    const target = `https://api.upcitemdb.com/prod/trial/lookup?upc=${encodeURIComponent(code)}`;
+    let last;
+    for (const relay of PUBLIC_RELAYS) {
+      try { return await lookupVia(relay(target)); }
+      catch (e) { last = e; if (e.status === 429) break; }   // limit is UPCitemdb's, not the relay's
+    }
+    throw last;
   }
   let nativeDetector;   // undefined: not checked yet · null: not available on this phone
   async function getNativeDetector() {
@@ -3145,9 +3171,9 @@ export default {
       <h2 class="section">Barcodes</h2>
       <div class="list">
         <a class="card row" href="#/settings/lookup">
-          <div class="grow"><div class="t">Online barcode lookup</div><div class="s">${(ls.get('lookupRelay') || '').trim()
-            ? 'On. New barcodes are looked up to fill in the model number and description.'
-            : 'Off. Set it up once to fill in the model number and description from a barcode.'}</div></div>${ICON.chev}
+          <div class="grow"><div class="t">Online barcode lookup</div><div class="s">${lookupPrefs.on()
+            ? `On${lookupPrefs.own() ? ', through your own relay' : ''}. New barcodes are looked up to fill in the model number and description.`
+            : 'Off. Turn it on to fill in the model number and description from a new barcode.'}</div></div>${ICON.chev}
         </a>
       </div>
       ${room ? `<h2 class="section">Storage on this phone</h2>
@@ -3207,66 +3233,67 @@ export default {
     return frag;
   }
 
-  /** Settings › Online barcode lookup (1.16): the address of the user's relay, a test,
-   *  and click-by-click steps to make the relay on a free Cloudflare account. */
+  /** Settings › Online barcode lookup (1.16): on/off, a test, and (optional) the user's
+   *  own relay with click-by-click steps for a free Cloudflare account. */
   function viewLookupSettings() {
     setChrome({ title: 'Barcode lookup', back: '#/settings' });
-    const relay = (ls.get('lookupRelay') || '').trim();
+    const own = lookupPrefs.own();
     const frag = h(`<div class="lookup-set">
-      <p class="desc">When you scan a barcode the app hasn't seen before, it can look it up online to fill in the model number and description. Only the barcode number is sent. It uses UPCitemdb's free lookup (about 100 a day), through a small relay on your own free Cloudflare account. Barcodes you have already linked to a product never need the internet.</p>
-      <label class="field"><span>Relay address</span>
-        <input class="input" name="relay" type="url" inputmode="url" placeholder="https://barcode-lookup.yourname.workers.dev" value="${esc(relay)}" autocomplete="off" spellcheck="false" autocapitalize="off">
-      </label>
-      <div class="actions">
-        <button class="btn" data-a="test">Test it</button>
-        <button class="btn primary" data-a="save">Save</button>
+      <p class="desc">When you scan a barcode the app hasn't seen before, it looks it up online to fill in the model number and description. Only the barcode number is sent, to UPCitemdb's free product database (about 100 lookups a day) through a free public relay. Barcodes you have already linked to a product never need the internet.</p>
+      <div class="list">
+        <label class="card row switch-row">
+          <div class="grow"><div class="t">Look up new barcodes online</div><div class="s">You always see what was found and tap Use this</div></div>
+          <input type="checkbox" class="switch" name="on" ${lookupPrefs.on() ? 'checked' : ''}>
+        </label>
       </div>
+      <div class="actions"><button class="btn" data-a="test">Test it</button></div>
       <div class="card banner test-out" hidden></div>
-      ${relay ? '<button class="link-btn danger-txt" data-a="off">Turn off online lookup</button>' : ''}
-      <h2 class="section">Set up the relay (one time, about 10 minutes)</h2>
-      <ol class="steps">
-        <li>Tap <b>Copy relay code</b> below. It is a short piece of code the relay runs.
-          <button class="btn wide" data-a="copy" style="margin-top:8px">Copy relay code</button></li>
-        <li>In Chrome, go to <b>dash.cloudflare.com</b> and tap <b>Sign up</b>. Use your email and a password. The free plan is all you need. Confirm your email from the message they send.</li>
-        <li>Back on the Cloudflare page, tap <b>☰</b> (top left) › <b>Compute (Workers)</b> › <b>Workers &amp; Pages</b>.</li>
-        <li>Tap <b>Create</b> › <b>Start with Hello World!</b> (it may be under the <b>Workers</b> tab). Change the name to <b>barcode-lookup</b> and tap <b>Deploy</b>.</li>
-        <li>Tap <b>Edit code</b>. Tap inside the code, select all of it and delete it. Then long-press and <b>Paste</b> the relay code you copied.</li>
-        <li>Tap <b>Deploy</b> (top right) and confirm.</li>
-        <li>Go back to the worker's page. Copy its address. It looks like <b>https://barcode-lookup.yourname.workers.dev</b>.</li>
-        <li>Come back here, paste it in <b>Relay address</b> above, and tap <b>Save</b>. Then tap <b>Test it</b>.</li>
-      </ol>
-      <p class="hint">If Cloudflare's screens look different, ask Claude in your project for the current steps.</p>
+      <p class="hint">The public relays are free services run by others. They can be slow or stop working, and their users share the free daily limit. If lookups often fail, set up your own relay below.</p>
+      <details class="own-relay" ${own ? 'open' : ''}>
+        <summary>Use my own relay (optional)</summary>
+        <label class="field"><span>Relay address</span>
+          <input class="input" name="relay" type="url" inputmode="url" placeholder="https://barcode-lookup.yourname.workers.dev" value="${esc(own)}" autocomplete="off" spellcheck="false" autocapitalize="off">
+          <small class="hint">Leave empty to use the public relay.</small>
+        </label>
+        <div class="actions"><button class="btn primary" data-a="save">Save relay address</button></div>
+        <h2 class="section">Set up your own relay (one time, about 10 minutes)</h2>
+        <ol class="steps">
+          <li>Tap <b>Copy relay code</b>. It is a short piece of code the relay runs.
+            <button class="btn wide" data-a="copy" style="margin-top:8px">Copy relay code</button></li>
+          <li>In Chrome, go to <b>dash.cloudflare.com</b> and tap <b>Sign up</b>. The free plan is all you need. Confirm your email from the message they send.</li>
+          <li>Tap <b>☰</b> (top left) › <b>Compute (Workers)</b> › <b>Workers &amp; Pages</b>.</li>
+          <li>Tap <b>Create</b> › <b>Start with Hello World!</b>. Change the name to <b>barcode-lookup</b> and tap <b>Deploy</b>.</li>
+          <li>Tap <b>Edit code</b>. Select all of the code and delete it, then long-press and <b>Paste</b> the relay code.</li>
+          <li>Tap <b>Deploy</b> (top right) and confirm.</li>
+          <li>Copy the worker's address. It looks like <b>https://barcode-lookup.yourname.workers.dev</b>.</li>
+          <li>Paste it in <b>Relay address</b> above, tap <b>Save relay address</b>, then <b>Test it</b>.</li>
+        </ol>
+      </details>
     </div>`);
     const el = frag.firstElementChild, inp = el.querySelector('[name=relay]'), out = el.querySelector('.test-out');
-    const clean = () => inp.value.trim().replace(/\/+$/, '');
     const show = (html) => { out.hidden = false; out.innerHTML = html; };
+    el.querySelector('[name=on]').onchange = (e) => { ls.set('lookupOn', e.target.checked ? 'on' : 'off'); toast(e.target.checked ? 'Online lookup is on' : 'Online lookup is off'); };
     el.querySelector('[data-a=copy]').onclick = async () => {
       try { await navigator.clipboard.writeText(RELAY_CODE); toast('Relay code copied'); }
       catch { sheet(`<h3>Relay code</h3><p class="desc">Copy all of this.</p><textarea class="input code-box" readonly>${esc(RELAY_CODE)}</textarea>
         <div class="actions"><button class="btn primary" data-a="ok">Done</button></div>`, (s2, close) => { s2.querySelector('textarea').select(); s2.querySelector('[data-a=ok]').onclick = close; }); }
     };
     el.querySelector('[data-a=save]').onclick = () => {
-      const v = clean();
+      const v = inp.value.trim().replace(/\/+$/, '');
       if (v && !/^https:\/\/[^\s/]+/.test(v)) { toast('The address should start with https://'); inp.focus(); return; }
-      ls.set('lookupRelay', v); toast(v ? 'Saved. Online lookup is on.' : 'Online lookup is off');
-      render();
+      ls.set('lookupRelay', v); toast(v ? 'Saved. Lookups use your relay.' : 'Saved. Lookups use the public relay.');
     };
-    const off = el.querySelector('[data-a=off]');
-    if (off) off.onclick = () => { ls.set('lookupRelay', ''); toast('Online lookup is off'); render(); };
     el.querySelector('[data-a=test]').onclick = async () => {
-      const v = clean();
-      if (!v) { toast('Paste the relay address first'); inp.focus(); return; }
-      const keep = ls.get('lookupRelay');
-      ls.set('lookupRelay', v);
       show('<span class="spin dark"></span> Testing with a sample barcode…');
       try {
-        const f = await lookupOnline('4002293401102');
-        show(f ? `<b>It works.</b> The sample barcode came back as: ${esc(f.title || f.model)}${f.model ? ` (model ${esc(f.model)})` : ''}. Tap <b>Save</b> if you haven't yet.`
-          : '<b>The relay answered</b>, but the sample barcode wasn\'t found. That can happen. Try scanning a real product.');
+        const f = await lookupOnline('4002293401102', { force: true });
+        show(f === undefined ? "<b>No internet right now.</b> Try again when you have signal."
+          : f ? `<b>It works.</b> The sample barcode came back as: ${esc(f.title || f.model)}${f.model ? ` (model ${esc(f.model)})` : ''}.`
+          : "<b>The lookup works</b>, but the sample barcode wasn't found. That can happen. Try scanning a real product.");
       } catch (e) {
-        show(e?.status === 429 ? "<b>The relay works</b>, but today's free lookups are used up. It resets tomorrow."
-          : "<b>Couldn't reach the relay.</b> Check the address (it starts with https:// and ends in workers.dev) and that you tapped Deploy after pasting the code.");
-      } finally { ls.set('lookupRelay', keep || ''); }
+        show(e?.status === 429 ? "<b>The lookup works</b>, but today's free lookups are used up. It resets tomorrow."
+          : `<b>Couldn't reach the online lookup.</b> ${lookupPrefs.own() ? 'Check your relay address (it starts with https:// and ends in workers.dev) and that you tapped Deploy after pasting the code.' : 'The public relays may be down. Try again later, or set up your own relay below.'}`);
+      }
     };
     return frag;
   }
@@ -3293,7 +3320,7 @@ export default {
       ['Adding inventory', 'Tap <b>Add inventory</b> on the <b>Inventory</b> tab, or open a project and tap <b>Add inventory</b> there. From the Inventory tab, pick the <b>Project</b> first. Tap the photo box to take a picture, enter the model/part number and a description, then the quantity, team member, storage location and product owner, and tap <b>Add inventory</b>. If that part number is already in the project, the form says so: tap <b>Open it</b> and use <b>+ Add</b> there instead. If it is in another project, tap <b>Use its description and photos</b> to fill them in.'],
       ['Photos', 'Tap the photo box to open the camera inside the app. Tap the round button to take the picture, then <b>Use photo</b> or <b>Retake</b>. Tap ⚡ for the flashlight. If the camera won\'t start, tap <b>Use phone camera</b>. Or tap <b>Choose from library</b> for a saved picture. A product can have as many photos as you like: open the product, tap <b>⋮</b> › <b>Edit product and photos</b>, then tap <b>+ Add</b>. The <b>★ main photo</b> is the one shown in lists. Tap a photo there to make it the main photo or remove it. On the product page, swipe the photos left and right and tap one to see it full size.'],
       ['Scanning barcodes and labels', 'On <b>Add inventory</b> or <b>Edit product</b>, tap <b>Scan</b> in the Model / part number box. In <b>Barcode</b> mode, point at a barcode or QR code: the phone buzzes and the number is filled in. For a label with no barcode, tap <b>Read text</b>, fit the part number inside the box and tap the round button, then tap the right number in the list. Check it matches the label, since letters like O and 0 can get mixed up. To find a product, tap the barcode button in the search box on the <b>Inventory</b> tab or inside a project and scan it. If it isn\'t there yet, tap <b>Add inventory</b> and the number is filled in. All of this works with no internet. Read text downloads its reader (about 6 MB) the first time you use it.'],
-      ['Store barcodes (UPC)', 'The number under a store barcode isn\'t the model number, so the app links the barcode to the product instead. The first time, type the model number or use <b>Read text</b>, then add the product. After that, scanning that barcode anywhere fills in the model number, description and photos. To link a barcode to a product you already have, open it › <b>⋮</b> › <b>Edit product and photos</b> › <b>Scan</b>. <b>Look it up online</b> searches UPCitemdb or Google for a new barcode. To have new barcodes looked up automatically, set up <b>Settings</b> › <b>Online barcode lookup</b> once.'],
+      ['Store barcodes (UPC)', 'The number under a store barcode isn\'t the model number, so the app links the barcode to the product instead. The first time, type the model number or use <b>Read text</b>, then add the product. After that, scanning that barcode anywhere fills in the model number, description and photos. To link a barcode to a product you already have, open it › <b>⋮</b> › <b>Edit product and photos</b> › <b>Scan</b>. <b>Look it up online</b> searches UPCitemdb or Google for a new barcode. New barcodes are also looked up online automatically: you see what was found and tap <b>Use this</b>. Only the barcode number is sent. Turn it off or test it in <b>Settings</b> › <b>Online barcode lookup</b>. The free lookup allows about 100 barcodes a day.'],
       ['Adding and removing stock', 'Tap a product to open it, then tap <b>+ Add</b> or <b>− Remove</b>. Pick the date (today is filled in), enter the quantity and, if you like, a note such as "10 for sections 15A". Add asks for the storage location and product owner. Remove asks where the stock comes from and won\'t let you take more than that spot holds. The form shows the stock there and the total after the change. Notes you used recently appear under the note box: tap one to reuse it. Right after saving, tap <b>Undo</b> at the bottom if it was a mistake.'],
       ['Storage locations and product owners', 'Stock is counted separately for each storage location (for example Bin A, Truck) and product owner. The product page shows the total and how much is at each one. In the Add form, pick a storage location and product owner, or choose <b>+ New storage location…</b> / <b>+ New product owner…</b> to type a new one. The names the project already uses show first, under <b>This project</b>. Every project shares one list of each: tap <b>Lists</b> (bottom of the screen). Tap a name there to see what is stored there (or owned), and to rename or remove it with <b>⋮</b>. Renaming updates every project and History.'],
       ['If the app gets closed', 'The Add inventory form saves what you type as you go. If the phone closes the app before you tap <b>Add inventory</b>, open the form again and it is filled back in, photos included. Tap <b>Start over</b> to clear it.'],
