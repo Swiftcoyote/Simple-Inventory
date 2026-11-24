@@ -654,3 +654,23 @@ button.photo-pick { font: inherit; cursor: pointer; padding: 0; }
 .scan-bar i { display: block; height: 100%; width: 0; background: #4c8dff; transition: width .2s; }
 .spin { width: 18px; height: 18px; flex: none; border-radius: 50%; border: 3px solid rgba(255,255,255,.3); border-top-color: #fff; animation: spin .8s linear infinite; }
 @keyframes spin { to { transform: rotate(360deg); } }
+
+/* ---------- 1.16: barcodes linked to products ---------- */
+.bc-note { margin: -4px 0 12px; }
+.bc-note .card.banner { margin: 0; }
+.bc-note .banner.ok { border-color: color-mix(in srgb, var(--in) 45%, var(--line)); }
+.bc-code { display: inline-flex; align-items: center; gap: 4px; font-family: ui-monospace, Menlo, Consolas, monospace; font-size: 14px; color: var(--muted); white-space: nowrap; }
+.bc-code svg { width: 16px; height: 16px; }
+.bc-line { display: flex; align-items: center; gap: 10px; font-size: 14px; color: var(--muted); padding: 0 2px; }
+.bc-line .grow { flex: 1; }
+.bc-note .actions { flex-wrap: wrap; }
+.bc-note .actions .btn { display: inline-flex; align-items: center; justify-content: center; gap: 6px; }
+.bc-note .actions .btn svg { width: 18px; height: 18px; }
+.bc-note .link-btn { margin-top: 8px; }
+.spin.dark { display: inline-block; vertical-align: -3px; margin-right: 6px; border-color: color-mix(in srgb, var(--muted) 35%, transparent); border-top-color: var(--accent); }
+.lookup-set .actions { margin: 4px 0 12px; }
+.lookup-set .test-out { margin-top: 4px; }
+.steps { padding-left: 22px; margin: 0 0 12px; display: grid; gap: 12px; line-height: 1.45; }
+.steps b { color: var(--text); }
+.code-box { width: 100%; min-height: 260px; font-family: ui-monospace, Menlo, Consolas, monospace; font-size: 12px; }
+.link-btn.danger-txt { color: var(--out); }
