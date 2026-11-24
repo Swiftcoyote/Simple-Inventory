@@ -25,6 +25,13 @@ A phone-first inventory tracker that works offline and installs to your home scr
   Product pages show a swipeable strip; tap for full size.
 - **Names on screen** (1.9): Location is shown as "Storage Location", Owner as "Product Owner",
   Who/People as "Team Member(s)". Stored field names (`location`, `owner`, `person`) are unchanged.
+- **Scan** (1.15): a Scan button in the Model / part number box (Add inventory and Edit product)
+  opens the in-app scanner. *Barcode* mode reads barcodes and QR codes on its own (the browser's
+  `BarcodeDetector`, or bundled ZXing where that's missing). *Read text* mode takes a picture of the
+  label, reads it with the bundled Tesseract OCR and lists the words it found, part-number-looking
+  ones first; nothing fills in until the user taps one. The search boxes on the Inventory tab and
+  inside a project have a scan button too (*Scan to find*): one match opens the product, no match
+  offers Add inventory with the number filled in. All offline; see `vendor/README.md`.
 - **Projects** keep inventory separate per job.
 - **Products** have a photo, model/part number, description and stock count.
 - **Add / Remove** on the product page logs each change with a date (defaults to today),
@@ -88,6 +95,7 @@ When releasing:
 - `index.html`, `styles.css`, `app.js` — UI (no build step), including Settings, Help and What's New
 - `changelog.js` — release notes and the current version/build
 - `db.js` — storage layer and data model
+- `vendor/` — barcode and text-reading libraries (1.15), loaded only when first used; kept in a separate service-worker cache. See `vendor/README.md`.
 - `sw.js` — offline cache. **Bump `VERSION` whenever any file changes** (it matches the build, e.g. `1.1-build2`) so installed phones update.
 
 ## Data model
