@@ -4,6 +4,19 @@
  * to match (e.g. '1.1-build2'). Builds count up and never reset. */
 window.CHANGELOG = [
   {
+    version: '1.16', build: 19, date: '2026-11-24',
+    title: 'Barcodes fill in the model number',
+    changes: [
+      'The number under a store barcode (UPC) isn\'t the model number, so the app no longer types it into Model / part number. Instead it links the barcode to the product.',
+      'The first time you scan a barcode, type the model number (or tap Read text on the label) and add the product as usual. The app remembers that barcode. Every scan after that, in any project, fills in the model number, description and photos for you. No internet needed.',
+      'Scan to find also works with linked barcodes: scan the box and the product opens.',
+      'Already have the product? Open it, tap ⋮ › Edit product and photos › Scan, and scan its barcode to link it. Unlink is there too.',
+      'For a barcode the app hasn\'t seen yet, tap Look it up online to search UPCitemdb or Google in your browser.',
+      'Online barcode lookup: a barcode the app hasn\'t seen yet is looked up automatically in UPCitemdb\'s free product database (through a free public relay, no setup). You see what was found and tap Use this. Only the barcode number is sent. Turn it off or test it in Settings › Online barcode lookup.',
+      'Barcodes and QR codes that hold letters, like a part number, still fill in Model / part number directly.',
+    ],
+  },
+  {
     version: '1.15', build: 18, date: '2026-11-24',
     title: 'Scan barcodes and read part numbers',
     changes: [

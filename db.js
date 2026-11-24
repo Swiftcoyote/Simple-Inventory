@@ -8,8 +8,9 @@
  *   products  { id, projectId, partNumber, description, photo (Blob|null), stock,
  *               morePhotos (1.11: [Blob], the extra photos; `photo` is the main one, shown
  *               in lists; missing = none),
- *               lowStockAt (number|null: flag when stock <= this), barcode, location
- *               (barcode/location unused, kept null), createdAt, updatedAt }
+ *               lowStockAt (number|null: flag when stock <= this), barcode (1.16: the
+ *               scanned UPC/EAN linked to this product, or null), location (unused, kept
+ *               null), createdAt, updatedAt }
  *   movements { id, productId, projectId, delta (+in / -out), kind ('in'|'out'|'count'|'move'),
  *               location, owner (names; '' or missing = "Not set", e.g. entries before 1.3),
  *               note, at (ISO time of the event), dateOnly (true when the user picked a
@@ -487,6 +488,7 @@ const DB = (() => {
       if (data.photo !== undefined) rec.photo = data.photo;
       if (data.morePhotos !== undefined) rec.morePhotos = data.morePhotos || [];
       if (data.lowStockAt !== undefined) rec.lowStockAt = cleanLow(data.lowStockAt);
+      if (data.barcode !== undefined) rec.barcode = tidy(data.barcode) || null;
       rec.updatedAt = now();
       s.put(rec);
     } else {
@@ -496,7 +498,7 @@ const DB = (() => {
         id: uid(), projectId: data.projectId,
         partNumber: data.partNumber, description: data.description,
         photo: data.photo || null, morePhotos: data.morePhotos || [], stock: initial,
-        barcode: null, location: null, lowStockAt: cleanLow(data.lowStockAt),
+        barcode: tidy(data.barcode) || null, location: null, lowStockAt: cleanLow(data.lowStockAt),
         createdAt: t, updatedAt: t,
       };
       s.put(rec);
