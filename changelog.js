@@ -4,6 +4,15 @@
  * to match (e.g. '1.1-build2'). Builds count up and never reset. */
 window.CHANGELOG = [
   {
+    version: '1.18', build: 21, date: '2026-11-24',
+    title: 'Pick the Stock on hand columns',
+    changes: [
+      'Under Stock on hand in What\'s in the report, tick Added, Used and In stock to choose the columns. Tick only In stock to send a report of just what you have now.',
+      'Stock & reorder now starts with In stock only. Tick Added or Used for more detail. Project total shows all three.',
+      'The PDF, the printout and the spreadsheet show the same columns.',
+    ],
+  },
+  {
     version: '1.17', build: 20, date: '2026-11-24',
     title: 'Simpler reports',
     changes: [

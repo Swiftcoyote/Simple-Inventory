@@ -75,6 +75,8 @@ A phone-first inventory tracker that works offline and installs to your home scr
   is ticked). Reorder list = `DB.isLow` right now; Stock on hand is one table per part number in
   part-number order; Used each month = 'out' legs per month (tables of 4 months). The report
   state (`repState`) is kept in localStorage.
+  **1.18**: Stock on hand columns are options under it (colAdded, colUsed, colEnd); Stock & reorder
+  starts with In stock only. The section count only counts top-level sections.
 
 All data is stored on the phone (IndexedDB). There is no server and no sync.
 
