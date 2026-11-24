@@ -62,6 +62,8 @@
     chev: '<svg class="chev" viewBox="0 0 24 24" width="20" height="20"><path d="M9 5l7 7-7 7" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/></svg>',
     camera: '<svg viewBox="0 0 24 24" width="28" height="28" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"><path d="M4 8h3l2-3h6l2 3h3v11H4z"/><circle cx="12" cy="13" r="3.5"/></svg>',
     chart: '<svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><path d="M5 20V11M12 20V5M19 20v-6"/></svg>',
+    barcode: '<svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M3 7V4h3M18 4h3v3M21 17v3h-3M6 20H3v-3M7 8v8M10 8v8M13 8v8M17 8v8"/></svg>',
+    text: '<svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 7V4h3M18 4h3v3M21 17v3h-3M6 20H3v-3M8 9V8h8v1M12 8v8M10 16h4"/></svg>',
     torch: '<svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"><path d="M13 2L5 14h6l-1 8 8-12h-6z"/></svg>',
     box: '<svg viewBox="0 0 24 24" width="24" height="24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"><path d="M3 7l9-4 9 4v10l-9 4-9-4z"/><path d="M3 7l9 4 9-4M12 11v10"/></svg>',
   };
@@ -704,6 +706,300 @@
     start();
   }
 
+  // ---------- scan (1.15) ----------
+  // Everything here runs on the phone with no internet. Barcodes: Android Chrome's built-in
+  // reader (BarcodeDetector), or the bundled ZXing library where that's missing. Text: the
+  // bundled Tesseract reader in vendor/ocr, downloaded once on first use and then kept by
+  // the service worker. Nothing is sent anywhere.
+  const scripts = {};
+  const loadScript = (src) => scripts[src] ||= new Promise((res, rej) => {
+    const s = document.createElement('script');
+    s.src = src; s.onload = res;
+    s.onerror = () => { delete scripts[src]; s.remove(); rej(new Error(`Could not load ${src}`)); };
+    document.head.append(s);
+  });
+  let scanPrefill = null;   // part number from Scan to find, for the next Add inventory form
+  let nativeDetector;   // undefined: not checked yet · null: not available on this phone
+  async function getNativeDetector() {
+    if (nativeDetector !== undefined) return nativeDetector;
+    nativeDetector = null;
+    try {
+      if ('BarcodeDetector' in window) {
+        const formats = await window.BarcodeDetector.getSupportedFormats();
+        if (formats.length) nativeDetector = new window.BarcodeDetector({ formats });
+      }
+    } catch {}
+    return nativeDetector;
+  }
+  let zxReader = null;
+  async function zxingDecode(canvas) {
+    if (!zxReader) {
+      await loadScript('vendor/zxing.min.js');
+      const Z = window.ZXing;
+      zxReader = new Z.MultiFormatReader();
+      zxReader.setHints(new Map([[Z.DecodeHintType.TRY_HARDER, true]]));
+    }
+    const Z = window.ZXing;
+    try {
+      const bmp = new Z.BinaryBitmap(new Z.HybridBinarizer(new Z.HTMLCanvasElementLuminanceSource(canvas)));
+      return [zxReader.decodeWithState(bmp).getText()];
+    } catch { return []; }
+  }
+  /** Barcode values in a canvas (more than one when the label has several codes). */
+  async function readBarcodes(canvas) {
+    const det = await getNativeDetector();
+    if (det) {
+      try { return [...new Set((await det.detect(canvas)).map(b => (b.rawValue || '').trim()).filter(Boolean))]; } catch {}
+    }
+    return (await zxingDecode(canvas)).map(s => s.trim()).filter(Boolean);
+  }
+
+  let ocrWorker = null, ocrProgress = null;
+  const ocrLoaded = () => ls.get('ocrReady') === '1';
+  function getOcr() {
+    ocrWorker ||= (async () => {
+      await loadScript('vendor/ocr/tesseract.min.js');
+      const base = new URL('vendor/ocr/', location.href).href;
+      // A failed download is reported to errorHandler (createWorker would otherwise wait
+      // forever); give up after 3 minutes too, for a connection that stalls.
+      const w = await new Promise((res, rej) => {
+        const timer = setTimeout(() => rej(new Error('Text reader download timed out')), 180000);
+        window.Tesseract.createWorker('eng', 1, {
+          workerPath: `${base}worker.min.js`, corePath: base, langPath: base, gzip: true,
+          workerBlobURL: false, cacheMethod: 'none', logger: (m) => ocrProgress?.(m),
+          errorHandler: (e) => { clearTimeout(timer); rej(e instanceof Error ? e : new Error(String(e))); },
+        }).then((wk) => { clearTimeout(timer); res(wk); }, (e) => { clearTimeout(timer); rej(e); });
+      });
+      // Labels are short lines of letters, digits and a few symbols.
+      await w.setParameters({ tessedit_pageseg_mode: '11', preserve_interword_spaces: '1' });
+      ls.set('ocrReady', '1');
+      return w;
+    })().catch((e) => { ocrWorker = null; throw e; });
+    return ocrWorker;
+  }
+
+  /** Words and lines from a label, best part-number guesses first. A part number usually
+   *  mixes letters and digits (3M-2097, SKU 48-22-8424), so those come first. */
+  function textCandidates(text) {
+    const LBL = '(?:p/?n|part(?:no|num|number)?|model(?:no)?|mdl|cat(?:alog)?(?:no)?|item(?:no)?|sku|mfr|ref|no)';
+    const IS_LABEL = new RegExp(`^${LBL}[#:.]*$`, 'i'), LABEL_IN = new RegExp(`^${LBL}[#:.]+`, 'i');
+    const trim = (s) => s.replace(/^[^A-Za-z0-9]+|[^A-Za-z0-9]+$/g, '');
+    const lines = text.split('\n').map(l => l.replace(/\s+/g, ' ').trim()).filter(l => trim(l).length >= 2);
+    const words = new Map();
+    for (const line of lines) {
+      const toks = line.split(' ');
+      toks.forEach((raw, i) => {
+        let t = trim(raw);
+        const afterLabel = i > 0 && IS_LABEL.test(toks[i - 1].replace(/\.$/, '.'));
+        const stripped = trim(raw.replace(/^[^A-Za-z0-9]+/, '').replace(LABEL_IN, ''));   // "P/N:3M-2097" → "3M-2097"
+        if (stripped !== t && /\d/.test(stripped)) t = stripped;
+        if (t.length < 3) return;
+        const dig = (t.match(/\d/g) || []).length, alpha = (t.match(/[A-Za-z]/g) || []).length;
+        if (!dig) return;
+        let score = (alpha ? 4 : 2) + Math.min(t.length, 12) / 4 + (/[-./]/.test(t) ? 1 : 0) + (afterLabel ? 3 : 0);
+        if (/^\d{1,2}[/.-]\d{1,2}[/.-]\d{2,4}$/.test(t)) score -= 4;   // looks like a date
+        const k = t.toUpperCase();
+        if (!words.has(k) || words.get(k).score < score) words.set(k, { s: t, score });
+      });
+    }
+    const best = [...words.values()].sort((a, b) => b.score - a.score).slice(0, 8).map(w => w.s);
+    const seen = new Set(best.map(s => s.toUpperCase()));
+    const other = [];
+    for (const l of lines) {
+      const t = trim(l);
+      if (t.length > 40 || seen.has(t.toUpperCase())) continue;
+      seen.add(t.toUpperCase()); other.push(t);
+    }
+    return { best, other: other.slice(0, 10) };
+  }
+
+  /** In-app scanner: Barcode mode reads barcodes and QR codes on its own; Read text mode
+   *  takes a picture and lists the words it finds. onPick(text) gets the value the user chose.
+   *  Nothing fills in by itself from text, because the reader can misread letters. */
+  function scanCode(onPick, { title = 'Scan' } = {}) {
+    if (!navigator.mediaDevices?.getUserMedia) { toast("This phone's browser can't use the camera here"); return; }
+    hideToast();
+    let mode = ls.get('scanMode') === 'text' ? 'text' : 'code';
+    const node = h(`<div class="camera scan" role="dialog" aria-modal="true" aria-label="${esc(title)}">
+      <div class="cam-top"><button class="icon-btn" data-a="close" aria-label="Close">✕</button>
+        <span class="cam-title">${esc(title)}</span><button class="icon-btn cam-torch" data-a="torch" aria-label="Flashlight" hidden>${ICON.torch}</button></div>
+      <div class="cam-view"><video playsinline muted autoplay></video><img alt="" hidden>
+        <div class="scan-frame"><div class="scan-box"><i></i><div class="scan-hint"></div></div></div>
+        <div class="cam-msg" hidden></div></div>
+      <div class="cam-bar">
+        <div class="scan-live">
+          <div class="scan-modes" role="tablist">
+            <button role="tab" data-m="code">${ICON.barcode}Barcode</button>
+            <button role="tab" data-m="text">${ICON.text}Read text</button>
+          </div>
+          <button class="cam-shutter" data-a="snap" aria-label="Read the text" hidden disabled></button>
+        </div>
+        <div class="scan-out" hidden></div>
+      </div>
+    </div>`);
+    const el = node.firstElementChild;
+    const video = el.querySelector('video'), still = el.querySelector('.cam-view img'), msg = el.querySelector('.cam-msg');
+    const frame = el.querySelector('.scan-frame'), hint = el.querySelector('.scan-hint');
+    const live = el.querySelector('.scan-live'), out = el.querySelector('.scan-out');
+    const snapBtn = el.querySelector('[data-a=snap]'), torchBtn = el.querySelector('[data-a=torch]');
+    let stream = null, closed = false, torchOn = false, paused = false, loopTimer = null, busy = false, stillUrl = null;
+
+    const stop = () => { clearTimeout(loopTimer); stream?.getTracks().forEach(t => t.stop()); stream = null; };
+    const close = () => {
+      closed = true; stop(); ocrProgress = null; if (stillUrl) URL.revokeObjectURL(stillUrl);
+      el.remove(); document.removeEventListener('visibilitychange', onVis);
+    };
+    const pick = (v) => { navigator.vibrate?.(60); close(); onPick(v); };
+    const fail = (text) => {
+      stop(); video.hidden = true; frame.hidden = true; torchBtn.hidden = true; live.hidden = true; out.hidden = true;
+      msg.hidden = false;
+      msg.innerHTML = `${esc(text)}<button class="btn primary" data-a="ok">OK</button>`;
+      msg.querySelector('[data-a=ok]').onclick = close;
+    };
+    /** The part of the picture inside the aiming box, as a canvas (`max` = longest side). */
+    const grab = (max) => {
+      const vw = video.videoWidth, vh = video.videoHeight;
+      if (!vw || !vh) return null;
+      const box = el.querySelector('.scan-box').getBoundingClientRect(), vr = video.getBoundingClientRect();
+      // The video fills the screen (object-fit: cover, edges cut off); map the box from
+      // screen to video pixels.
+      const s = Math.max(vr.width / vw, vr.height / vh);
+      const ox = vr.left + (vr.width - vw * s) / 2, oy = vr.top + (vr.height - vh * s) / 2;
+      const pad = mode === 'code' ? 0.15 : 0.05;
+      let x = (box.left - ox) / s, y = (box.top - oy) / s, w = box.width / s, hh = box.height / s;
+      x -= w * pad; y -= hh * pad; w *= 1 + 2 * pad; hh *= 1 + 2 * pad;
+      x = Math.max(0, x); y = Math.max(0, y); w = Math.min(vw - x, w); hh = Math.min(vh - y, hh);
+      const k = Math.min(1, max / Math.max(w, hh));
+      const c = document.createElement('canvas');
+      c.width = Math.round(w * k); c.height = Math.round(hh * k);
+      c.getContext('2d').drawImage(video, x, y, w, hh, 0, 0, c.width, c.height);
+      return c;
+    };
+    const chips = (vals, cls = '') => vals.map(v => `<button class="scan-chip ${cls}" data-v="${esc(v)}">${esc(v)}</button>`).join('');
+    const showOut = (html) => {
+      out.innerHTML = html; out.hidden = false; live.hidden = true;
+      out.querySelectorAll('[data-v]').forEach(b => b.onclick = () => pick(b.dataset.v));
+      out.querySelector('[data-a=again]')?.addEventListener('click', resume);
+    };
+    const resume = () => {
+      paused = false; out.hidden = true; live.hidden = false; still.hidden = true; video.hidden = false; frame.hidden = false;
+      if (stillUrl) { URL.revokeObjectURL(stillUrl); stillUrl = null; }
+      if (!stream) start(); else loop();
+    };
+
+    // Barcode mode: look at the picture a few times a second until a code is read.
+    const loop = () => {
+      clearTimeout(loopTimer);
+      if (closed || paused || mode !== 'code' || !stream) return;
+      loopTimer = setTimeout(async () => {
+        if (closed || paused || mode !== 'code' || busy) return loop();
+        busy = true;
+        let codes = [];
+        try { const c = grab(1000); if (c) codes = await readBarcodes(c); } catch (e) { console.error(e); }
+        busy = false;
+        if (closed || paused || mode !== 'code') return;
+        if (codes.length === 1) return pick(codes[0]);
+        if (codes.length > 1) {
+          paused = true; navigator.vibrate?.(40);
+          return showOut(`<div class="scan-q">Found ${codes.length} codes. Tap the right one:</div>
+            <div class="scan-chips">${chips(codes)}</div>
+            <button class="btn" data-a="again">Scan again</button>`);
+        }
+        loop();
+      }, 220);
+    };
+
+    const setMode = (m) => {
+      mode = m; ls.set('scanMode', m);
+      el.querySelectorAll('[data-m]').forEach(b => { b.classList.toggle('on', b.dataset.m === m); b.setAttribute('aria-selected', b.dataset.m === m); });
+      frame.classList.toggle('text', m === 'text');
+      hint.textContent = m === 'code' ? 'Point at the barcode or QR code' : 'Fit the part number inside the box, then tap the button';
+      snapBtn.hidden = m !== 'text';
+      if (m === 'code') loop();
+      else if (!ocrLoaded()) getOcr().catch(() => {});   // start the one-time download early
+    };
+
+    const start = async () => {
+      try {
+        stream = await navigator.mediaDevices.getUserMedia({ audio: false,
+          video: { facingMode: { ideal: 'environment' }, width: { ideal: 1920 }, height: { ideal: 1080 } } });
+        if (closed) { stop(); return; }
+        video.srcObject = stream;
+        await video.play().catch(() => {});
+        snapBtn.disabled = false;
+        const track = stream.getVideoTracks()[0];
+        // Close-up labels: ask for continuous autofocus where the phone allows it.
+        try { if (track?.getCapabilities?.().focusMode?.includes('continuous')) await track.applyConstraints({ advanced: [{ focusMode: 'continuous' }] }); } catch {}
+        torchBtn.hidden = !track?.getCapabilities?.().torch;
+        if (torchOn) track.applyConstraints({ advanced: [{ torch: true }] }).catch(() => {});
+        loop();
+      } catch (e) {
+        if (closed) return;
+        fail(e?.name === 'NotAllowedError'
+          ? 'The camera is blocked for this app. To allow it, tap the icon left of the web address › Permissions › Camera › Allow.'
+          : "The camera couldn't start here.");
+      }
+    };
+    const onVis = () => {
+      if (document.hidden) { stop(); snapBtn.disabled = true; }
+      else if (!closed && !stillUrl && msg.hidden) start();
+    };
+    document.addEventListener('visibilitychange', onVis);
+
+    el.querySelector('[data-a=close]').onclick = close;
+    el.querySelectorAll('[data-m]').forEach(b => b.onclick = () => setMode(b.dataset.m));
+    torchBtn.onclick = async () => {
+      const track = stream?.getVideoTracks()[0];
+      try { await track.applyConstraints({ advanced: [{ torch: !torchOn }] }); torchOn = !torchOn; torchBtn.classList.toggle('on', torchOn); } catch {}
+    };
+
+    // Read text mode: freeze the picture, read it, list what was found.
+    snapBtn.onclick = async () => {
+      const c = grab(1600);
+      if (!c) return;
+      paused = true;
+      const blob = await new Promise(res => c.toBlob(res, 'image/jpeg', 0.9));
+      stillUrl = URL.createObjectURL(blob);
+      still.src = stillUrl; still.hidden = false; video.hidden = true; frame.hidden = true;
+      stop(); torchBtn.hidden = true;
+      const first = !ocrLoaded();
+      showOut(`<div class="scan-q"><span class="spin"></span><span class="scan-status">${first
+        ? 'Getting the text reader ready. This is a one-time download of about 6 MB, then it works with no internet.'
+        : 'Reading the label…'}</span></div><div class="scan-bar"><i></i></div>`);
+      const status = out.querySelector('.scan-status'), bar = out.querySelector('.scan-bar i');
+      ocrProgress = (m) => {
+        if (closed || !bar.isConnected) return;
+        if (m.status === 'recognizing text') status.textContent = 'Reading the label…';
+        else if (/loading|initializ/.test(m.status) && first) status.textContent = `Getting the text reader ready (one-time download, about 6 MB)…`;
+        bar.style.width = `${Math.round((m.progress || 0) * 100)}%`;
+      };
+      let text = '';
+      try {
+        const w = await getOcr();
+        if (closed) return;
+        text = (await w.recognize(c)).data.text || '';
+      } catch (e) {
+        console.error(e);
+        if (closed) return;
+        return showOut(`<div class="scan-q">${first
+          ? "Couldn't download the text reader. Connect to Wi-Fi or data and try again. You only need internet this once."
+          : "Couldn't read the text. Try again."}</div><button class="btn" data-a="again">Try again</button>`);
+      }
+      if (closed) return;
+      const { best, other } = textCandidates(text);
+      showOut(best.length || other.length ? `
+        ${best.length ? `<div class="scan-q">Tap the part number:</div><div class="scan-chips">${chips(best, 'best')}</div>` : ''}
+        ${other.length ? `<details class="scan-more" ${best.length ? '' : 'open'}><summary>Other text it found (${other.length})</summary><div class="scan-chips">${chips(other)}</div></details>` : ''}
+        <div class="scan-note">Check it matches the label. You can fix it in the box after.</div>
+        <button class="btn" data-a="again">Retake</button>`
+        : `<div class="scan-q">No text found. Get closer, hold steady, and use ⚡ in the dark.</div><button class="btn" data-a="again">Retake</button>`);
+    };
+
+    $sheetRoot.replaceChildren(el);
+    setMode(mode);
+    start();
+  }
+
   // ---------- chrome ----------
   function setChrome({ title, back, menu }) {
     $title.textContent = title;
@@ -772,7 +1068,8 @@
 
     const frag = h(`<div>
       ${products.length ? `
-        <input class="search" type="search" placeholder="Search part # or description" value="${esc(searchTerm)}" autocomplete="off" enterkeyhint="search">
+        <div class="search-wrap"><input class="search" type="search" placeholder="Search part # or description" value="${esc(searchTerm)}" autocomplete="off" enterkeyhint="search">
+          <button type="button" class="scan-btn" id="scanFind" aria-label="Scan to find a product">${ICON.barcode}</button></div>
         <div class="summary-row">
           <div class="summary">${plural(products.length, 'product')} · ${plural(units, 'unit')} in stock</div>
           ${lowCount ? `<button class="filter ${lowOnly ? 'on' : ''}" id="lowOnly" aria-pressed="${lowOnly}">Low stock only (${lowCount})</button>` : ''}
@@ -799,6 +1096,16 @@
 
     const s = frag.querySelector('.search');
     if (s) s.oninput = () => { searchTerm = s.value; drawList(); };
+    // Scan to find (1.15): one match opens it; no match offers Add inventory with that number.
+    const sf = frag.getElementById('scanFind');
+    if (sf) sf.onclick = () => scanCode((v) => {
+      const hit = products.filter(p => (p.partNumber || '').trim().toLowerCase() === v.toLowerCase());
+      if (hit.length === 1) return go(`#/i/${hit[0].id}`);
+      searchTerm = s.value = v; lowOnly = false; drawList();
+      if (!hit.length) menuSheet(`${v} isn't in this project`, [
+        { label: `Add inventory with ${v}`, run: () => { scanPrefill = v; go(`#/p/${id}/new`); } },
+      ]);
+    }, { title: 'Scan to find' });
     const lo = frag.getElementById('lowOnly');
     if (lo) lo.onclick = () => { lowOnly = !lowOnly; lo.classList.toggle('on', lowOnly); lo.setAttribute('aria-pressed', lowOnly); drawList(); };
     frag.getElementById('newProd').onclick = () => go(`#/p/${id}/new`);
@@ -853,7 +1160,8 @@
       <input type="file" accept="image/*" id="camInput" capture="environment" hidden>
       <input type="file" accept="image/*" id="libInput" hidden>
       <label class="field"><span>Model / part number</span>
-        <input class="input" name="partNumber" value="${esc(existing?.partNumber)}" placeholder="e.g. 3M-2097" autocapitalize="characters" spellcheck="false" enterkeyhint="next">
+        <div class="scan-input"><input class="input" name="partNumber" value="${esc(existing?.partNumber)}" placeholder="e.g. 3M-2097" autocapitalize="characters" spellcheck="false" enterkeyhint="next">
+          <button type="button" class="scan-btn" id="scanPn" aria-label="Scan a barcode or read the label">${ICON.barcode}<span>Scan</span></button></div>
       </label>
       <div class="card banner dup-note" hidden></div>
       <label class="field"><span>Description</span>
@@ -964,6 +1272,12 @@
     };
     pnEl.addEventListener('input', checkDup);
     checkDup();
+    // Scan (1.15): barcode / QR code, or read the printed part number from the label.
+    const fillPn = (v) => {
+      pnEl.value = v; pnEl.dispatchEvent(new Event('input', { bubbles: true }));
+      toast(`Part number filled in: ${v}`);
+    };
+    frag.getElementById('scanPn').onclick = () => scanCode(fillPn, { title: 'Scan part number' });
 
     if (form.elements.proj) form.elements.proj.onchange = () => {
       projectId = form.elements.proj.value;
@@ -1040,6 +1354,8 @@
         note.querySelector('[data-a=fresh]').onclick = async () => { await DB.clearDraft().catch(() => {}); render(); };
       }
     }
+
+    if (!existing && scanPrefill) { pnEl.value = scanPrefill; scanPrefill = null; checkDup(); saveDraft(); }
 
     form.onsubmit = async (e) => {
       e.preventDefault();
@@ -1324,7 +1640,8 @@
 
     const frag = h(`<div>
       ${items.length ? `
-        <input class="search" type="search" placeholder="Search part #, description or project" value="${esc(st.q)}" autocomplete="off" enterkeyhint="search">
+        <div class="search-wrap"><input class="search" type="search" placeholder="Search part #, description or project" value="${esc(st.q)}" autocomplete="off" enterkeyhint="search">
+          <button type="button" class="scan-btn" id="scanFind" aria-label="Scan to find a product">${ICON.barcode}</button></div>
         <form class="card rfilters inv-filters" autocomplete="off">
           <details class="more-filters" ${nFilters() ? 'open' : ''}>
             <summary>Filters and sort${nFilters() ? ` (${nFilters()})` : ''}</summary>
@@ -1386,6 +1703,16 @@
 
     const s = frag.querySelector('.search');
     if (s) s.oninput = () => { st.q = s.value; draw(); };
+    // Scan to find (1.15): opens the product with that part number, or offers to add it.
+    const sf = frag.getElementById('scanFind');
+    if (sf) sf.onclick = () => scanCode((v) => {
+      const k = `pn:${v.trim().toLowerCase()}`;
+      if (items.some(i => i.key === k)) return go(`#/inventory/${encodeURIComponent(k)}`);
+      st.q = s.value = v; draw();
+      menuSheet(`${v} isn't in your inventory`, [
+        { label: `Add inventory with ${v}`, run: () => { scanPrefill = v; go('#/inventory/new'); } },
+      ]);
+    }, { title: 'Scan to find' });
     const lo = frag.getElementById('lowOnly');
     if (lo) lo.onclick = () => { st.low = !st.low; lo.classList.toggle('on', st.low); lo.setAttribute('aria-pressed', st.low); draw(); };
     const f = frag.querySelector('form.inv-filters');
@@ -2768,6 +3095,7 @@
       ['Deleting inventory, projects or all data', 'To delete products but keep their project, tap <b>Settings</b> (bottom of the screen) › <b>Delete inventory</b>, tick the products (or <b>Select all</b> under a project) and tap <b>Delete</b>. To delete whole projects, tap <b>Delete projects</b>, tick the projects you want gone and tap <b>Delete</b>. To wipe everything, tap <b>Delete all data</b> and type <b>DELETE</b> to confirm. Both offer <b>Back up first</b>. A safety copy is kept, so if it was a mistake, tap <b>Undo</b> straight away or <b>Undo last delete</b> in Settings. Only the last restore or delete can be undone.'],
       ['Adding inventory', 'Tap <b>Add inventory</b> on the <b>Inventory</b> tab, or open a project and tap <b>Add inventory</b> there. From the Inventory tab, pick the <b>Project</b> first. Tap the photo box to take a picture, enter the model/part number and a description, then the quantity, team member, storage location and product owner, and tap <b>Add inventory</b>. If that part number is already in the project, the form says so: tap <b>Open it</b> and use <b>+ Add</b> there instead. If it is in another project, tap <b>Use its description and photos</b> to fill them in.'],
       ['Photos', 'Tap the photo box to open the camera inside the app. Tap the round button to take the picture, then <b>Use photo</b> or <b>Retake</b>. Tap ⚡ for the flashlight. If the camera won\'t start, tap <b>Use phone camera</b>. Or tap <b>Choose from library</b> for a saved picture. A product can have as many photos as you like: open the product, tap <b>⋮</b> › <b>Edit product and photos</b>, then tap <b>+ Add</b>. The <b>★ main photo</b> is the one shown in lists. Tap a photo there to make it the main photo or remove it. On the product page, swipe the photos left and right and tap one to see it full size.'],
+      ['Scanning barcodes and labels', 'On <b>Add inventory</b> or <b>Edit product</b>, tap <b>Scan</b> in the Model / part number box. In <b>Barcode</b> mode, point at a barcode or QR code: the phone buzzes and the number is filled in. For a label with no barcode, tap <b>Read text</b>, fit the part number inside the box and tap the round button, then tap the right number in the list. Check it matches the label, since letters like O and 0 can get mixed up. To find a product, tap the barcode button in the search box on the <b>Inventory</b> tab or inside a project and scan it. If it isn\'t there yet, tap <b>Add inventory</b> and the number is filled in. All of this works with no internet. Read text downloads its reader (about 6 MB) the first time you use it.'],
       ['Adding and removing stock', 'Tap a product to open it, then tap <b>+ Add</b> or <b>− Remove</b>. Pick the date (today is filled in), enter the quantity and, if you like, a note such as "10 for sections 15A". Add asks for the storage location and product owner. Remove asks where the stock comes from and won\'t let you take more than that spot holds. The form shows the stock there and the total after the change. Notes you used recently appear under the note box: tap one to reuse it. Right after saving, tap <b>Undo</b> at the bottom if it was a mistake.'],
       ['Storage locations and product owners', 'Stock is counted separately for each storage location (for example Bin A, Truck) and product owner. The product page shows the total and how much is at each one. In the Add form, pick a storage location and product owner, or choose <b>+ New storage location…</b> / <b>+ New product owner…</b> to type a new one. The names the project already uses show first, under <b>This project</b>. Every project shares one list of each: tap <b>Lists</b> (bottom of the screen). Tap a name there to see what is stored there (or owned), and to rename or remove it with <b>⋮</b>. Renaming updates every project and History.'],
       ['If the app gets closed', 'The Add inventory form saves what you type as you go. If the phone closes the app before you tap <b>Add inventory</b>, open the form again and it is filled back in, photos included. Tap <b>Start over</b> to clear it.'],

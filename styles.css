@@ -466,7 +466,7 @@ body.has-tabs .toast { bottom: calc(84px + var(--tabbar-h) + var(--safe-b)); }
 .inv-filters .more-filters { margin: 0; }
 .inv-filters .more-filters summary { padding: 2px 0; }
 .inv-filters .more-filters[open] summary { margin-bottom: 10px; }
-.search + .inv-filters { margin-top: -2px; }
+.search + .inv-filters, .search-wrap + .inv-filters { margin-top: -2px; }
 .row .s.inv-where { font-size: 13px; margin-top: 2px; }
 a.card.inv-proj { display: block; color: inherit; text-decoration: none; }
 .inv-proj .places { padding: 0 16px 4px; }
@@ -599,3 +599,58 @@ button.photo-pick { font: inherit; cursor: pointer; padding: 0; }
 .cam-review { display: flex; gap: 12px; }
 .cam-review .btn { flex: 1; }
 .camera .btn:not(.primary) { color: #111; }
+
+/* ---------- 1.15: scan barcodes and read labels ---------- */
+.scan-input { position: relative; }
+.scan-input .input { padding-right: 96px; }
+.scan-input .scan-btn {
+  position: absolute; right: 6px; top: 50%; transform: translateY(-50%);
+  display: inline-flex; align-items: center; gap: 6px; height: 36px; padding: 0 12px; border-radius: 9px;
+  border: 0; background: color-mix(in srgb, var(--accent) 14%, transparent); color: var(--accent);
+  font: inherit; font-weight: 650; font-size: 15px;
+}
+.search-wrap { position: relative; margin-bottom: 12px; }
+.search-wrap .search { padding-right: 54px; margin-bottom: 0; }
+.search-wrap .scan-btn {
+  position: absolute; right: 5px; top: 5px; bottom: 5px; width: 42px;
+  display: grid; place-items: center; border: 0; border-radius: 9px;
+  background: color-mix(in srgb, var(--accent) 14%, transparent); color: var(--accent);
+}
+.scan-btn:active { transform: translateY(-50%) scale(.95); }
+.search-wrap .scan-btn:active { transform: scale(.95); }
+
+.scan .cam-view video { position: absolute; inset: 0; object-fit: cover; }
+.scan .cam-view img { position: absolute; inset: 0; background: #000; }
+.scan-frame { position: absolute; inset: 0; display: grid; place-items: center; pointer-events: none; }
+.scan-box {
+  width: min(78vw, 340px); height: min(46vw, 200px); border-radius: 16px; position: relative;
+  box-shadow: 0 0 0 100vmax rgba(0,0,0,.45); outline: 3px solid #fff; outline-offset: -3px;
+}
+.scan-box i { position: absolute; left: 8%; right: 8%; top: 50%; height: 2px; background: #ff4d4d; box-shadow: 0 0 8px #ff4d4d; animation: scanline 1.6s ease-in-out infinite alternate; }
+.scan-frame.text .scan-box { width: min(86vw, 380px); height: min(30vw, 130px); }
+.scan-frame.text .scan-box i { display: none; }
+@keyframes scanline { from { transform: translateY(-34px); } to { transform: translateY(34px); } }
+@media (prefers-reduced-motion: reduce) { .scan-box i { animation: none; } }
+.scan-hint { position: absolute; top: calc(100% + 14px); left: 50%; transform: translateX(-50%); width: max-content; max-width: 88vw; padding: 7px 14px; border-radius: 999px; background: rgba(0,0,0,.6); font-weight: 600; font-size: 15px; text-align: center; }
+
+.scan-live { display: grid; justify-items: center; gap: 14px; }
+.scan-modes { display: inline-flex; background: rgba(255,255,255,.14); border-radius: 999px; padding: 4px; }
+.scan-modes button {
+  display: inline-flex; align-items: center; gap: 6px; border: 0; background: none; color: #fff;
+  font: inherit; font-weight: 650; font-size: 15px; padding: 9px 16px; border-radius: 999px;
+}
+.scan-modes button.on { background: #fff; color: #111; }
+.scan-out { display: grid; gap: 12px; max-height: 46vh; overflow-y: auto; }
+.scan-q { font-weight: 650; font-size: 16px; display: flex; gap: 10px; align-items: center; line-height: 1.35; }
+.scan-chips { display: flex; flex-wrap: wrap; gap: 8px; }
+.scan-chip {
+  border: 1px solid rgba(255,255,255,.35); background: rgba(255,255,255,.1); color: #fff;
+  font: inherit; font-size: 16px; padding: 10px 14px; border-radius: 10px; text-align: left; word-break: break-all;
+}
+.scan-chip.best { background: #fff; color: #111; font-weight: 700; font-family: ui-monospace, Menlo, Consolas, monospace; letter-spacing: .02em; }
+.scan-more summary { color: #9cc3ff; font-weight: 600; padding: 4px 0 8px; }
+.scan-note { color: #bbb; font-size: 13px; }
+.scan-bar { height: 6px; border-radius: 3px; background: rgba(255,255,255,.18); overflow: hidden; }
+.scan-bar i { display: block; height: 100%; width: 0; background: #4c8dff; transition: width .2s; }
+.spin { width: 18px; height: 18px; flex: none; border-radius: 50%; border: 3px solid rgba(255,255,255,.3); border-top-color: #fff; animation: spin .8s linear infinite; }
+@keyframes spin { to { transform: rotate(360deg); } }

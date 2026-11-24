@@ -4,6 +4,18 @@
  * to match (e.g. '1.1-build2'). Builds count up and never reset. */
 window.CHANGELOG = [
   {
+    version: '1.15', build: 18, date: '2026-11-24',
+    title: 'Scan barcodes and read part numbers',
+    changes: [
+      'On the Add inventory and Edit product screens, tap Scan in the Model / part number box. The camera opens inside the app.',
+      'Barcode: point at a barcode or QR code. As soon as it reads it, the phone buzzes and the number is filled in. If the label has more than one code, tap the right one.',
+      'Read text: for labels with no barcode. Fit the printed part number inside the box and tap the round button. The app lists the words it found, part numbers first. Tap the right one to fill it in. Always check it, because the reader can mix up letters like O and 0.',
+      'The first time you use Read text, the app downloads its text reader (about 6 MB, Wi-Fi is best). After that it works with no internet. Barcodes work with no internet from the start. Nothing is sent to the cloud.',
+      'Scan to find: tap the barcode button in the search box on the Inventory tab (or inside a project). Scan a box and it opens that product. If it isn\'t in your inventory yet, tap Add inventory and the part number is already filled in.',
+      'Tap ⚡ for the flashlight while scanning.',
+    ],
+  },
+  {
     version: '1.14', build: 17, date: '2026-11-23',
     title: '⋮ menu on Inventory tab products',
     changes: [
