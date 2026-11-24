@@ -4,6 +4,19 @@
  * to match (e.g. '1.1-build2'). Builds count up and never reset. */
 window.CHANGELOG = [
   {
+    version: '1.19', build: 22, date: '2026-11-24',
+    title: 'Bigger photos and a better photo viewer',
+    changes: [
+      'Bigger photos in your product lists. Use the new switch above the list to pick List (small photos, like before), Big photos or Grid (2 big photo cards per row with the count on the photo). Big photos is the new default, and the app remembers your choice. It works on the Inventory tab and inside each project.',
+      'Press and hold a product\'s photo in the list to see its photos full screen without opening the product.',
+      'Full-screen photos: pinch or double-tap to zoom in, drag to look around, and double-tap again to zoom out.',
+      'Swipe left and right between photos, or tap one of the small photos at the bottom to jump to it.',
+      'Tap a photo once to hide the buttons, and tap again to bring them back.',
+      'Your phone\'s Back button now closes the photo instead of leaving the page.',
+      'Storage location photos work the same way.',
+    ],
+  },
+  {
     version: '1.18', build: 21, date: '2026-11-24',
     title: 'Pick the Stock on hand columns',
     changes: [
