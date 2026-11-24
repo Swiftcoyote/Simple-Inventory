@@ -4,6 +4,20 @@
  * to match (e.g. '1.1-build2'). Builds count up and never reset. */
 window.CHANGELOG = [
   {
+    version: '1.17', build: 20, date: '2026-11-24',
+    title: 'Simpler reports',
+    changes: [
+      'Reports now start with 4 big buttons. 📦 Stock & reorder shows what to reorder, how many you have and the totals (for the weekly or every-2-weeks report). 📅 Monthly use shows how much of each product was used each month. 🏁 Project total covers the whole project, from its first entry to today. 🔍 Detailed report shows everything, including who added or took what, and when.',
+      'Choose exactly what goes in the report: tap What\'s in the report and tick a box for each section. The big buttons tick the boxes for you. The app remembers your choice for next time.',
+      'New Reorder list: every product at or below its low-stock warning right now, at the top in red.',
+      'New Used each month: a table with one column per month and a total.',
+      'Stock on hand is now one simple table: part number, description, added, used and in stock, with ⚠ next to low stock. Tick Show storage locations to see where each product is kept.',
+      'Products are listed in part-number order.',
+      'New dates: Last 2 weeks, Last 3 months and Whole project.',
+      'The PDF, the printout and the spreadsheet show only the sections you ticked.',
+    ],
+  },
+  {
     version: '1.16', build: 19, date: '2026-11-24',
     title: 'Barcodes fill in the model number',
     changes: [

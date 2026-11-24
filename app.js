@@ -1696,7 +1696,7 @@ export default {
 
     const frag = h(`<div>
       ${galleryHtml(photos)}
-      <div class="pn">${esc(p.partNumber || '—')}</div>
+      <div class="rp-pn">${esc(p.partNumber || '—')}</div>
       ${p.description ? `<p class="desc">${esc(p.description)}</p>` : ''}
       <div class="card stockbox-wrap ${low ? 'is-low' : ''}">
         <div class="stockbox">
@@ -1919,7 +1919,7 @@ export default {
       .sort((a, b) => b.m.at.localeCompare(a.m.at) || b.m.createdAt.localeCompare(a.m.createdAt));
     const frag = h(`<div>
       ${galleryHtml(it.photos)}
-      <div class="pn">${esc(it.partNumber || '—')}</div>
+      <div class="rp-pn">${esc(it.partNumber || '—')}</div>
       ${descs.map(d => `<p class="desc">${esc(d)}</p>`).join('')}
       <div class="card stockbox-wrap ${low ? 'is-low' : ''}">
         <div class="stockbox">
@@ -1978,7 +1978,9 @@ export default {
     const rep = frag.querySelector('[data-a=reports]');
     if (rep) rep.onclick = () => {
       const first = recent[recent.length - 1].m;
-      Object.assign(repState, { proj: '', prod: it.key, loc: ALL, own: ALL, who: ALL, period: 'custom',
+      // 1.17: open it as a Detailed report so every entry shows
+      const det = PRESETS.find(x => x.key === 'detail');
+      Object.assign(repState, { preset: det.key, secs: { ...det.secs }, proj: '', prod: it.key, loc: ALL, own: ALL, who: ALL, period: 'custom',
         from: toDateInput(new Date(first.at)), to: toDateInput() });
       saveRep(); go('#/reports', true);
     };
@@ -2774,15 +2776,43 @@ export default {
   // End = stock at the end of the last day (for the places picked).
   const ALL = '__all';
   const PERIODS = [
-    ['week', 'This week'], ['lastweek', 'Last week'], ['month', 'This month'],
-    ['lastmonth', 'Last month'], ['30', 'Last 30 days'], ['custom', 'Custom'],
+    ['week', 'This week'], ['lastweek', 'Last week'], ['2weeks', 'Last 2 weeks'], ['month', 'This month'],
+    ['lastmonth', 'Last month'], ['3months', 'Last 3 months'], ['whole', 'Whole project'], ['custom', 'Custom'],
+  ];
+  // 1.17: what's in the report. Each section has a checkbox; the big report buttons
+  // (presets) tick a set of boxes and pick dates. Changing a box makes it a custom report.
+  const REP_SECTIONS = [
+    ['reorder', 'Reorder list', 'Products at or below their low-stock warning, right now', 'simple'],
+    ['totals', 'Totals', 'Total added, used and in stock', 'simple'],
+    ['stock', 'Stock on hand', 'Added, used and in stock for each product', 'simple'],
+    ['locs', 'Show storage locations', 'Where each product is kept', 'simple', 'stock'],
+    ['monthly', 'Used each month', 'One column per month, with a total', 'simple'],
+    ['byProd', 'By product', 'Start, added, used and end for each product, and when it was last used', 'details'],
+    ['byLoc', 'By storage location', '', 'details'],
+    ['byOwn', 'By product owner', '', 'details'],
+    ['byWho', 'By team member', 'Who added and who used', 'details'],
+    ['byNote', 'By note', '', 'details'],
+    ['entries', 'Every entry', 'Each add, remove and move: what, when, who and the note', 'details'],
+  ];
+  const ALL_SECS = REP_SECTIONS.map(x => x[0]);
+  const secSet = (...keys) => Object.fromEntries(ALL_SECS.map(k => [k, keys.includes(k)]));
+  const PRESETS = [
+    { key: 'stock', icon: '📦', name: 'Stock & reorder', desc: 'How many we have and what to reorder', title: 'Stock & reorder report', period: '2weeks', secs: secSet('reorder', 'totals', 'stock') },
+    { key: 'monthly', icon: '📅', name: 'Monthly use', desc: 'How much was used each month', title: 'Monthly use report', period: '3months', secs: secSet('totals', 'monthly') },
+    { key: 'total', icon: '🏁', name: 'Project total', desc: 'Everything used from start to end', title: 'Project total report', period: 'whole', secs: secSet('totals', 'stock', 'monthly') },
+    { key: 'detail', icon: '🔍', name: 'Detailed report', desc: 'Who added or took what, and when', title: 'Detailed report', period: null, secs: secSet(...ALL_SECS) },
   ];
   const repState = (() => {
     let saved = {};
-    try { saved = JSON.parse(ss.get('report')) || {}; } catch {}
-    return { proj: '', period: 'month', from: '', to: '', loc: ALL, own: ALL, who: ALL, prod: ALL, ...saved };
+    try { saved = JSON.parse(ls.get('report') || ss.get('report')) || {}; } catch {}  // 1.17: kept between visits
+    const st = { proj: '', period: '2weeks', from: '', to: '', loc: ALL, own: ALL, who: ALL, prod: ALL, preset: 'stock', ...saved };
+    // reports saved before 1.17 have no section boxes: start them on Stock & reorder
+    if (!st.secs) { st.preset = 'stock'; st.secs = { ...PRESETS[0].secs }; }
+    for (const k of ALL_SECS) st.secs[k] = !!st.secs[k];
+    if (st.period === '30') st.period = 'month';
+    return st;
   })();
-  const saveRep = () => ss.set('report', JSON.stringify(repState));
+  const saveRep = () => ls.set('report', JSON.stringify(repState));
 
   function periodRange(key) {
     const t = new Date(); t.setHours(12, 0, 0, 0);
@@ -2793,6 +2823,8 @@ export default {
       case 'lastweek': return [toDateInput(day(monday, -7)), toDateInput(day(monday, -1))];
       case 'lastmonth': return [toDateInput(new Date(t.getFullYear(), t.getMonth() - 1, 1, 12)), toDateInput(new Date(t.getFullYear(), t.getMonth(), 0, 12))];
       case '30': return [toDateInput(day(t, -29)), toDateInput(t)];
+      case '2weeks': return [toDateInput(day(t, -13)), toDateInput(t)];
+      case '3months': return [toDateInput(new Date(t.getFullYear(), t.getMonth() - 2, 1, 12)), toDateInput(t)];
       default: return [toDateInput(new Date(t.getFullYear(), t.getMonth(), 1, 12)), toDateInput(t)];
     }
   }
@@ -2832,7 +2864,22 @@ export default {
       lists.people.add(m.person || '');
     }
 
+    // 1.17 Whole project: from the project's first entry (or all projects' first entry)
+    if (st.period === 'whole') {
+      let first = '';
+      for (const m of data.movements) if (pName[m.projectId] != null) { const d = toDateInput(new Date(m.at)); if (!first || d < first) first = d; }
+      st.from = first && first < st.to ? first : st.to;
+    }
     const { from, to } = st;
+    const many = !st.proj;
+    const keyOf = (p) => many ? invKey(p) : p.id;
+    // months in the range, as 'YYYY-MM', for Used each month
+    const months = [];
+    for (let y = +from.slice(0, 4), mo = +from.slice(5, 7); `${y}-${String(mo).padStart(2, '0')}` <= to.slice(0, 7); mo === 12 ? (y++, mo = 1) : mo++) {
+      months.push(`${y}-${String(mo).padStart(2, '0')}`);
+      if (months.length > 240) break;
+    }
+    const monthly = new Map();   // product key -> Map(month -> used)
     const placeOk = (g) => (st.loc === ALL || g.l === st.loc) && (st.own === ALL || g.o === st.own);
     const whoOk = (m) => st.who === ALL || (m.person || '') === st.who;
     const total = newAcc(), byProd = new Map(), byLoc = new Map(), byOwn = new Map(), byWho = new Map(), byNote = new Map();
@@ -2855,6 +2902,12 @@ export default {
         for (const a of targets) addLeg(a, g, m);
         addLeg(acc(byWho, m.person || ''), g, m);
         if (m.note) addLeg(acc(byNote, m.note.trim()), g, m);
+        if (g.type === 'out') {
+          const k = keyOf(pById[m.productId]);
+          if (!monthly.has(k)) monthly.set(k, new Map());
+          const mm = monthly.get(k), ym = d.slice(0, 7);
+          mm.set(ym, (mm.get(ym) || 0) - g.q);
+        }
       }
       if (inRange) entries.push(m);
     }
@@ -2872,10 +2925,32 @@ export default {
       o.total += qty;
       o.rows.push({ product: p, project: pName[p.projectId], qty, places });
     }
+    // 1.17 simple tables, in part-number order. In All projects, the same part number in
+    // different projects is one row (like the Inventory tab), with each project listed.
+    const pnSort = (a, b) => nat(a.partNumber || a.description, b.partNumber || b.description) || nat(pName[a.projectId], pName[b.projectId]);
+    const simple = new Map();
+    for (const p of [...products].sort(pnSort)) {
+      const a = byProd.get(p.id);
+      if (!a || !keep(a)) continue;
+      const k = keyOf(p);
+      if (!simple.has(k)) simple.set(k, { key: k, product: p, added: 0, used: 0, end: 0, low: false, projects: [], places: new Map() });
+      const o = simple.get(k);
+      o.added += a.added; o.used += a.used; o.end += a.end;
+      if (DB.isLow(p)) o.low = true;
+      if (a.end || DB.isLow(p)) o.projects.push([pName[p.projectId], a.end, DB.isLow(p)]);
+      for (const [hk, q] of hand.get(p.id) || []) { const l = hk.split('\u0000')[0]; if (q) o.places.set(l, (o.places.get(l) || 0) + q); }
+    }
+    const used = [...monthly].map(([k, mm]) => {
+      const p = products.find(x => keyOf(x) === k);
+      return { key: k, product: p, months: mm, total: [...mm.values()].reduce((x, y) => x + y, 0) };
+    }).filter(x => x.total).sort((a, b) => pnSort(a.product, b.product));
+    // Reorder list: low right now (current stock), one row per project
+    const reorder = allProducts.filter(p => DB.isLow(p) && (st.prod === ALL || p.id === st.prod || invKey(p) === st.prod)).sort(pnSort);
     return {
+      months, simple: [...simple.values()], used, reorder,
       onHand: [...onHand.values()].sort((a, b) => nat(a.product.partNumber || a.product.description, b.product.partNumber || b.product.description)),
       pName, pById, products, allProducts, lists, entries: entries.reverse(), total,
-      byProd: products.filter(p => byProd.has(p.id) && keep(byProd.get(p.id))).map(p => [p, byProd.get(p.id)]),
+      byProd: products.filter(p => byProd.has(p.id) && keep(byProd.get(p.id))).sort(pnSort).map(p => [p, byProd.get(p.id)]),
       byLoc: sortNames(byLoc), byOwn: sortNames(byOwn),
       byWho: [...byWho].filter(([, a]) => a.entries).sort((x, y) => (x[0] === '') - (y[0] === '') || nat(x[0], y[0])),
       byNote: [...byNote].sort((x, y) => (y[1].used - x[1].used) || (y[1].added - x[1].added) || nat(x[0], y[0])),
@@ -2947,7 +3022,95 @@ export default {
     const many = !st.proj;
     const prodName = (p) => `${esc(productName(p))}${p.partNumber && p.description ? ` <span class="muted">${esc(p.description)}</span>` : ''}`;
 
+    const secs = st.secs;
+    const preset = PRESETS.find(x => x.key === st.preset);
+    const repTitle = preset ? preset.title : 'Inventory report';
+    const nOn = ALL_SECS.filter(k => secs[k]).length;
+    const onNames = REP_SECTIONS.filter(x => secs[x[0]] && !x[4]).map(x => x[1]);
+    const monName = (ym, long) => new Date(`${ym}-15T12:00:00`).toLocaleDateString([], { month: long ? 'long' : 'short', ...(r.months[0].slice(0, 4) !== r.months[r.months.length - 1].slice(0, 4) ? { year: '2-digit' } : {}) });
+    const pCell = (p, sub = '') => `<td><div class="rp-pn">${esc(p.partNumber || p.description || 'Untitled')}</div>${p.partNumber && p.description ? `<div class="rp-ds">${esc(p.description)}</div>` : ''}${sub}</td>`;
+    const anyData = t.entries || r.simple.length;
+
+    const reorderHtml = () => `<h2 class="section">⚠ Reorder list (${r.reorder.length})</h2>
+      ${r.reorder.length ? `<div class="lowbox"><table class="stbl">
+        <thead><tr><th>Product</th><th class="n">In stock</th><th class="n">Warn at</th></tr></thead>
+        <tbody>${r.reorder.map(p => `<tr>${pCell(p, many ? `<div class="rp-ds">${esc(r.pName[p.projectId])}</div>` : '')}<td class="n warn">${p.stock}</td><td class="n">${p.lowStockAt}</td></tr>`).join('')}</tbody></table></div>`
+        : `<div class="card banner">Nothing is running low right now.</div>`}`;
+    const totalsHtml = () => `<h2 class="section">Totals</h2>
+      <div class="big3 ${showStock ? '' : 'two'}">
+        <div><b class="${t.added ? 'in-txt' : ''}">${plusN(t.added)}</b><span>Added</span></div>
+        <div><b class="${t.used ? 'out-txt' : ''}">${minusN(t.used)}</b><span>Used</span></div>
+        ${showStock ? `<div><b>${t.end}</b><span>In stock</span></div>` : ''}
+      </div>
+      ${t.count ? `<div class="rg-extra">Count corrections ${signed(t.count)}</div>` : ''}
+      ${showStock ? '' : `<p class="hint">In stock is left out while a team member is picked, because stock isn't owned by a team member.</p>`}`;
+    const stockHtml = () => `<h2 class="section">Stock on hand</h2>
+      ${r.simple.length ? `<div class="card tcard"><table class="stbl">
+        <thead><tr><th>Product</th><th class="n">Added</th><th class="n">Used</th>${showStock ? '<th class="n">In stock</th>' : ''}</tr></thead>
+        <tbody>${r.simple.map(o => {
+          const sub = [
+            many && o.projects.length ? `<div class="loc">${o.projects.map(([n, q, lo]) => `${esc(n)}: ${lo && showStock ? `<b class="warn">${q} ⚠</b>` : q}`).join(' · ')}</div>` : '',
+            secs.locs && o.places.size ? `<div class="loc">📍 ${[...o.places].sort((a, b) => (a[0] === '') - (b[0] === '') || nat(a[0], b[0])).map(([l, q]) => `${esc(l || NOT_SET)}: ${q}`).join(' · ')}</div>` : '',
+          ].join('');
+          return `<tr>${pCell(o.product, sub)}<td class="n">${o.added}</td><td class="n">${o.used}</td>${showStock ? `<td class="n ${o.low && !many ? 'warn' : ''}">${o.end}${o.low && !many ? ' ⚠' : ''}</td>` : ''}</tr>`;
+        }).join('')}</tbody></table></div>
+        ${showStock && r.simple.some(o => o.low) ? `<p class="hint">⚠ = at or below its low-stock warning${many ? ' in that project' : ''}.</p>` : ''}`
+        : `<div class="card banner">Nothing was added, used or in stock for these dates.</div>`}`;
+    const monthlyHtml = () => {
+      if (!r.used.length) return `<h2 class="section">Used each month</h2><div class="card banner">Nothing was used in these dates.</div>`;
+      const chunks = [];
+      for (let i = 0; i < r.months.length; i += 4) chunks.push(r.months.slice(i, i + 4));   // 4 months per table fits a phone
+      const sumM = (ym) => r.used.reduce((a, u) => a + (u.months.get(ym) || 0), 0);
+      const grand = r.used.reduce((a, u) => a + u.total, 0);
+      return `<h2 class="section">Used each month</h2>${chunks.map((ms, ci) => {
+        const last = ci === chunks.length - 1;
+        return `<div class="card tcard mtbl"><table class="stbl">
+          <thead><tr><th>Product</th>${ms.map(ym => `<th class="n">${esc(monName(ym))}</th>`).join('')}${last ? '<th class="n">Total</th>' : ''}</tr></thead>
+          <tbody>${r.used.map(u => `<tr>${pCell(u.product)}${ms.map(ym => `<td class="n ${u.months.get(ym) ? '' : 'zero'}">${u.months.get(ym) || 0}</td>`).join('')}${last ? `<td class="n">${u.total}</td>` : ''}</tr>`).join('')}
+          <tr class="tot"><td>All products</td>${ms.map(ym => `<td class="n">${sumM(ym)}</td>`).join('')}${last ? `<td class="n">${grand}</td>` : ''}</tr></tbody></table></div>`;
+      }).join('')}`;
+    };
+    const detailsHtml = () => `
+      ${secs.byProd ? `<h2 class="section">By product</h2>
+      ${r.byProd.length ? `<div class="list">${r.byProd.map(([p, a]) => groupHtml(prodName(p), a, { showStock, sub: many ? esc(r.pName[p.projectId]) : '', last: true })).join('')}</div>` : `<div class="card banner">No products in these dates.</div>`}` : ''}
+
+      ${secs.byLoc ? `<h2 class="section">By storage location</h2>
+      ${r.byLoc.length ? `<div class="list">${r.byLoc.map(([n, a]) => groupHtml(nameHtml(n), a, { showStock, split: true })).join('')}</div>` : `<div class="card banner">Nothing in these dates.</div>`}` : ''}
+
+      ${secs.byOwn ? `<h2 class="section">By product owner</h2>
+      ${r.byOwn.length ? `<div class="list">${r.byOwn.map(([n, a]) => groupHtml(nameHtml(n), a, { showStock, split: true })).join('')}</div>` : `<div class="card banner">Nothing in these dates.</div>`}` : ''}
+
+      ${secs.byWho ? `<h2 class="section">By team member</h2>
+      ${r.byWho.length ? `<div class="list">${r.byWho.map(([n, a]) => groupHtml(nameHtml(n), a, { showStock: false, sub: nEntries(a.entries) })).join('')}</div>`
+        : `<div class="card banner">No entries in these dates.</div>`}` : ''}
+
+      ${secs.byNote ? `<h2 class="section">By note</h2>
+      ${r.byNote.length ? `<div class="card rtable"><div class="rt-row rt-head"><span>Note</span><span>Added</span><span>Used</span></div>
+        ${r.byNote.map(([n, a]) => `<div class="rt-row"><span>${esc(n)}</span><span class="in-txt">${plusN(a.added)}</span><span class="out-txt">${minusN(a.used)}</span></div>`).join('')}</div>`
+        : `<div class="card banner">No notes on entries in these dates.</div>`}` : ''}
+
+      ${secs.entries ? `<h2 class="section">Every entry (${r.entries.length})</h2>
+      ${r.entries.length ? `<ul class="card hist rentries">${r.entries.map(m => {
+        const p = r.pById[m.productId];
+        const mv = m.kind === 'move';
+        return `<li>
+          <div class="d ${mv ? 'mv' : m.delta > 0 ? 'in' : 'out'}">${mv ? `⇄${m.qty}` : signed(m.delta)}</div>
+          <div style="flex:1;min-width:0">
+            <div class="what">${moveLabel(m)} ${mv ? m.qty : Math.abs(m.delta)} · ${esc(productName(p))}</div>
+            <div class="when">${esc(fmtWhen(m.at, m.dateOnly))}${many ? ` · ${esc(r.pName[m.projectId])}` : ''}</div>
+            <div class="where">${entryPlaceHtml(m)}</div>
+            <div class="who">By ${nameHtml(m.person)}</div>
+            ${m.note ? `<div class="note">${esc(m.note)}</div>` : ''}
+          </div>
+        </li>`;
+      }).join('')}</ul>` : `<div class="card banner">No entries in these dates.</div>`}` : ''}`;
+
     const frag = h(`<div class="report">
+      <div class="no-print">
+        <div class="pick-title">Pick a report</div>
+        <div class="presets">${PRESETS.map(x => `<button type="button" class="preset ${st.preset === x.key ? 'on' : ''}" data-preset="${x.key}" aria-pressed="${st.preset === x.key}">
+          <span class="ic" aria-hidden="true">${x.icon}</span><b>${esc(x.name)}</b><span>${esc(x.desc)}</span></button>`).join('')}</div>
+      </div>
       <form class="card rfilters no-print" autocomplete="off">
         <label class="field"><span>Project</span>
           <select class="input" name="proj"><option value="">All projects</option>
@@ -2961,6 +3124,14 @@ export default {
             <input class="input" type="date" name="to" value="${st.to}" max="${toDateInput()}" aria-label="To">
           </div>
         </div>
+        <details class="more-filters secs-box" ${st.secsOpen ? 'open' : ''}>
+          <summary>What's in the report (${nOn} of ${ALL_SECS.length})</summary>
+          <div class="secs-now">${onNames.length ? esc(onNames.join(' · ')) : 'Nothing ticked yet'}</div>
+          ${['simple', 'details'].map(g => `<div class="secs-h">${g === 'simple' ? 'Simple' : 'Details'}</div>
+            ${REP_SECTIONS.filter(x => x[3] === g).map(([k, l, d, , parent]) => `<label class="ck ${parent ? 'sub' : ''}">
+              <input type="checkbox" name="sec-${k}" ${secs[k] ? 'checked' : ''} ${parent && !secs[parent] ? 'disabled' : ''}>
+              <div><div class="l">${esc(l)}</div>${d ? `<div class="d">${esc(d)}</div>` : ''}</div></label>`).join('')}`).join('')}
+        </details>
         <details class="more-filters" ${filterBits.length ? 'open' : ''}>
           <summary>Filters${filterBits.length ? ` (${filterBits.length})` : ''}</summary>
           ${sel('loc', 'Storage Location', opts(r.lists.locations, st.loc), st.loc)}
@@ -2986,72 +3157,39 @@ export default {
       </div>
 
       <div class="report-head">
-        <div class="rh-title">Inventory report · ${esc(projLabel)}</div>
-        <div class="rh-sub">${esc(fmtDay(st.from))} to ${esc(fmtDay(st.to))}${filterBits.length ? ` · ${esc(filterBits.join(' · '))}` : ''}</div>
+        <div class="rh-title">${esc(repTitle)}</div>
+        <div class="rh-sub">${esc(projLabel)} · ${esc(fmtDay(st.from))} to ${esc(fmtDay(st.to))}${filterBits.length ? ` · ${esc(filterBits.join(' · '))}` : ''}</div>
         <div class="rh-sub print-only">Made ${esc(fmtStamp(new Date().toISOString()))} with Simple Inventory</div>
       </div>
 
-      <h2 class="section">Totals</h2>
-      <div class="card rgroup totals">
-        <div class="rnums ${showStock ? '' : 'two'}">
-          ${showStock ? numCell('Start', t.start) : ''}
-          ${numCell('Added', plusN(t.added), t.added ? 'in' : '')}
-          ${numCell('Used', minusN(t.used), t.used ? 'out' : '')}
-          ${showStock ? numCell('End', t.end) : ''}
-        </div>
-        ${extrasHtml(t)}
-        <div class="rg-extra">${nEntries(t.entries)} · ${plural(r.byProd.length, 'product')}</div>
-      </div>
-      ${showStock ? '' : `<p class="hint">Start and end stock are left out while a team member is picked, because stock isn't owned by a team member.</p>`}
-
-      ${showStock && r.onHand.length ? `
-      <h2 class="section">Stock on hand</h2>
-      <p class="hint" style="margin-top:-4px">What was in stock at the end of ${esc(fmtDay(st.to))}, and where.</p>
-      <div class="list">${r.onHand.map(o => `<div class="card onhand">
-        <div class="oh-head"><div class="grow"><div class="t">${esc(productName(o.product))}</div>${o.product.partNumber && o.product.description ? `<div class="s">${esc(o.product.description)}</div>` : ''}</div>
-          <div class="count"><span class="n">${o.total}</span><span class="l">${many && o.rows.length > 1 ? 'total' : 'in stock'}</span></div></div>
-        ${o.rows.map(x => `${many ? `<div class="oh-proj"><span>${esc(x.project)}</span><b>${x.qty}</b></div>` : ''}${placeTableHtml(x.places)}`).join('')}
-      </div>`).join('')}</div>` : ''}
-
-      ${t.entries || r.byProd.length ? `
-      <h2 class="section">By product</h2>
-      <div class="list">${r.byProd.map(([p, a]) => groupHtml(prodName(p), a, { showStock, sub: many ? esc(r.pName[p.projectId]) : '', last: true })).join('')}</div>
-
-      <h2 class="section">By storage location</h2>
-      <div class="list">${r.byLoc.map(([n, a]) => groupHtml(nameHtml(n), a, { showStock, split: true })).join('')}</div>
-
-      <h2 class="section">By product owner</h2>
-      <div class="list">${r.byOwn.map(([n, a]) => groupHtml(nameHtml(n), a, { showStock, split: true })).join('')}</div>
-
-      <h2 class="section">By team member</h2>
-      ${r.byWho.length ? `<div class="list">${r.byWho.map(([n, a]) => groupHtml(nameHtml(n), a, { showStock: false, sub: nEntries(a.entries) })).join('')}</div>`
-        : `<div class="card banner">No entries in these dates.</div>`}
-
-      <h2 class="section">By note</h2>
-      ${r.byNote.length ? `<div class="card rtable"><div class="rt-row rt-head"><span>Note</span><span>Added</span><span>Used</span></div>
-        ${r.byNote.map(([n, a]) => `<div class="rt-row"><span>${esc(n)}</span><span class="in-txt">${plusN(a.added)}</span><span class="out-txt">${minusN(a.used)}</span></div>`).join('')}</div>`
-        : `<div class="card banner">No notes on entries in these dates.</div>`}
-
-      <h2 class="section">Every entry (${r.entries.length})</h2>
-      ${r.entries.length ? `<ul class="card hist rentries">${r.entries.map(m => {
-        const p = r.pById[m.productId];
-        const mv = m.kind === 'move';
-        return `<li>
-          <div class="d ${mv ? 'mv' : m.delta > 0 ? 'in' : 'out'}">${mv ? `⇄${m.qty}` : signed(m.delta)}</div>
-          <div style="flex:1;min-width:0">
-            <div class="what">${moveLabel(m)} ${mv ? m.qty : Math.abs(m.delta)} · ${esc(productName(p))}</div>
-            <div class="when">${esc(fmtWhen(m.at, m.dateOnly))}${many ? ` · ${esc(r.pName[m.projectId])}` : ''}</div>
-            <div class="where">${entryPlaceHtml(m)}</div>
-            <div class="who">By ${nameHtml(m.person)}</div>
-            ${m.note ? `<div class="note">${esc(m.note)}</div>` : ''}
-          </div>
-        </li>`;
-      }).join('')}</ul>` : `<div class="card banner">No entries in these dates.</div>`}`
-      : `<div class="card empty" style="padding:24px">Nothing was added, used or in stock for these dates and filters.</div>`}
+      ${!nOn ? `<div class="card empty" style="padding:24px">Tick at least one box under <b>What's in the report</b>, or tap one of the big buttons.</div>` : `
+      ${secs.reorder ? reorderHtml() : ''}
+      ${anyData ? `
+        ${secs.totals ? totalsHtml() : ''}
+        ${secs.stock ? stockHtml() : ''}
+        ${secs.monthly ? monthlyHtml() : ''}
+        ${detailsHtml()}`
+      : ALL_SECS.some(k => k !== 'reorder' && secs[k]) ? `<div class="card empty" style="padding:24px">Nothing was added, used or in stock for these dates and filters.</div>` : ''}`}
     </div>`);
 
     const f = frag.querySelector('form');
     const redo = () => { saveRep(); render(); };
+    frag.querySelectorAll('[data-preset]').forEach(b => b.onclick = () => {
+      const x = PRESETS.find(y => y.key === b.dataset.preset);
+      st.preset = x.key; st.secs = { ...x.secs };
+      if (x.period) { st.period = x.period; [st.from, st.to] = periodRange(x.period); }
+      redo();
+    });
+    const sb = f.querySelector('.secs-box');
+    sb.ontoggle = () => { st.secsOpen = sb.open; saveRep(); };
+    for (const k of ALL_SECS) f.elements[`sec-${k}`].onchange = (e) => {
+      st.secs[k] = e.target.checked;
+      if (k === 'stock' && !e.target.checked) st.secs.locs = false;
+      // still matches a big button? keep it picked; otherwise it's a custom report
+      const same = PRESETS.find(x => x.key === st.preset && ALL_SECS.every(s => !!x.secs[s] === !!st.secs[s]));
+      if (!same) st.preset = 'custom';
+      redo();
+    };
     f.elements.proj.onchange = () => { st.proj = f.elements.proj.value; st.prod = ALL; redo(); };
     frag.querySelectorAll('[data-p]').forEach(b => b.onclick = () => {
       st.period = b.dataset.p;
@@ -3074,46 +3212,64 @@ export default {
     frag.querySelector('[data-a=preview]').onclick = () => { setPreview(true); window.scrollTo(0, 0); };
     frag.querySelector('[data-a=close-preview]').onclick = () => { setPreview(false); window.scrollTo(0, 0); };
     frag.querySelector('[data-a=csv]').onclick = () => {
+      if (!nOn) return toast("Tick at least one box under What's in the report first.");
       const tag = `${st.proj ? slug(r.pName[st.proj]) : 'all-projects'}-${st.from}-to-${st.to}`;
-      fileReadySheet(reportCsvFiles(r, st, tag, projLabel, filterBits), {
+      const files = reportCsvFiles(r, st, tag, projLabel, filterBits, repTitle);
+      fileReadySheet(files, {
         title: 'Report ready',
-        desc: `${esc(projLabel)}, ${esc(fmtDay(st.from))} to ${esc(fmtDay(st.to))}. Two files: the summary and every entry. They open in Excel, Google Sheets or Numbers.`,
+        desc: `${esc(projLabel)}, ${esc(fmtDay(st.from))} to ${esc(fmtDay(st.to))}. ${files.length > 1 ? 'Two files: the report and every entry.' : 'One file with the sections you ticked.'} They open in Excel, Google Sheets or Numbers.`,
         onSent: (how) => toast(how === 'saved' ? 'Saved to Downloads' : 'Shared'),
       });
     };
     return frag;
   }
 
-  function reportCsvFiles(r, st, tag, projLabel, filterBits) {
-    const head = ['Section', 'Name', 'Project', 'Start', 'Added', 'Used', 'Count corrections', 'Moved in', 'Moved out', 'End', 'Entries', 'Last used'];
-    const showStock = st.who === ALL;
-    const row = (sec, name, proj, a) => [sec, name, proj, showStock ? a.start : '', a.added, a.used, a.count, a.movedIn, a.movedOut,
-      showStock ? a.end : '', a.entries, a.lastUsed ? toDateInput(new Date(a.lastUsed.at)) : ''];
-    const sum = [
-      ['Inventory report', projLabel, `${st.from} to ${st.to}`, ...filterBits],
-      [],
-      head,
-      row('Totals', 'All', projLabel, r.total),
-      ...r.byProd.map(([p, a]) => row('Product', [p.partNumber, p.description].filter(Boolean).join(' · ') || 'Untitled', r.pName[p.projectId], a)),
-      ...r.byLoc.map(([n, a]) => row('Storage Location', orName(n), '', a)),
-      ...r.byOwn.map(([n, a]) => row('Product Owner', orName(n), '', a)),
-      ...r.byWho.map(([n, a]) => row('Team Member', orName(n), '', { ...a, start: '', end: '' })),
-      ...r.byNote.map(([n, a]) => row('Note', n, '', { ...a, start: '', end: '' })),
-    ];
-    if (showStock && r.onHand.length) {
-      sum.push([], [`Stock on hand at the end of ${st.to}`], ['Part number', 'Description', 'Project', 'Storage Location', 'Product Owner', 'Quantity']);
-      for (const o of r.onHand) for (const x of o.rows) for (const b of sortPlaces(x.places)) {
-        sum.push([x.product.partNumber || '', x.product.description || '', x.project, orName(b.location), orName(b.owner), b.qty]);
+  /** 1.17: the spreadsheet has the same sections as the report on screen, in the same order. */
+  function reportCsvFiles(r, st, tag, projLabel, filterBits, repTitle) {
+    const secs = st.secs, many = !st.proj, showStock = st.who === ALL;
+    const pn = (p) => p.partNumber || '', ds = (p) => p.description || '';
+    const sum = [[repTitle, projLabel, `${st.from} to ${st.to}`, ...filterBits]];
+    const anyData = r.total.entries || r.simple.length;
+    if (secs.reorder) {
+      sum.push([], ['Reorder list (low right now)'], ['Part number', 'Description', ...(many ? ['Project'] : []), 'In stock', 'Warn at']);
+      for (const p of r.reorder) sum.push([pn(p), ds(p), ...(many ? [r.pName[p.projectId]] : []), p.stock, p.lowStockAt]);
+    }
+    if (anyData && secs.totals) {
+      sum.push([], ['Totals'], ['Added', 'Used', ...(showStock ? ['In stock'] : []), 'Count corrections']);
+      sum.push([r.total.added, r.total.used, ...(showStock ? [r.total.end] : []), r.total.count]);
+    }
+    if (anyData && secs.stock) {
+      sum.push([], ['Stock on hand'], ['Part number', 'Description', 'Added', 'Used', ...(showStock ? ['In stock', 'Low'] : []), ...(many ? ['Projects'] : []), ...(secs.locs ? ['Storage locations'] : [])]);
+      for (const o of r.simple) sum.push([pn(o.product), ds(o.product), o.added, o.used, ...(showStock ? [o.end, o.low ? 'Yes' : ''] : []),
+        ...(many ? [o.projects.map(([n, q, lo]) => `${n}: ${q}${lo ? ' (low)' : ''}`).join('; ')] : []),
+        ...(secs.locs ? [[...o.places].map(([l, q]) => `${orName(l)}: ${q}`).join('; ')] : [])]);
+    }
+    if (anyData && secs.monthly) {
+      sum.push([], ['Used each month'], ['Part number', 'Description', ...r.months, 'Total']);
+      for (const u of r.used) sum.push([pn(u.product), ds(u.product), ...r.months.map(ym => u.months.get(ym) || 0), u.total]);
+      sum.push(['All products', '', ...r.months.map(ym => r.used.reduce((a, u) => a + (u.months.get(ym) || 0), 0)), r.used.reduce((a, u) => a + u.total, 0)]);
+    }
+    const head = ['Name', 'Project', 'Start', 'Added', 'Used', 'Count corrections', 'Moved in', 'Moved out', 'End', 'Entries', 'Last used'];
+    const row = (name, proj, a, stock = showStock) => [name, proj, stock ? a.start : '', a.added, a.used, a.count, a.movedIn, a.movedOut,
+      stock ? a.end : '', a.entries, a.lastUsed ? toDateInput(new Date(a.lastUsed.at)) : ''];
+    const group = (on, title, rows) => { if (anyData && on) sum.push([], [title], head, ...rows); };
+    group(secs.byProd, 'By product', r.byProd.map(([p, a]) => row([pn(p), ds(p)].filter(Boolean).join(' · ') || 'Untitled', r.pName[p.projectId], a)));
+    group(secs.byLoc, 'By storage location', r.byLoc.map(([n, a]) => row(orName(n), '', a)));
+    group(secs.byOwn, 'By product owner', r.byOwn.map(([n, a]) => row(orName(n), '', a)));
+    group(secs.byWho, 'By team member', r.byWho.map(([n, a]) => row(orName(n), '', a, false)));
+    group(secs.byNote, 'By note', r.byNote.map(([n, a]) => row(n, '', a, false)));
+    const files = [csvFile(`inventory-report-${tag}.csv`, sum)];
+    if (secs.entries) {
+      const ent = [['Date', 'Time', 'Project', 'Part number', 'Description', 'Type', 'Quantity', 'Storage Location', 'Product Owner', 'Moved to storage location', 'Moved to product owner', 'Team Member', 'Note', 'Edited']];
+      for (const m of r.entries.slice().reverse()) {
+        const p = r.pById[m.productId], d = new Date(m.at), mv = m.kind === 'move';
+        ent.push([toDateInput(d), m.dateOnly ? '' : hhmm(d), r.pName[m.projectId], p.partNumber || '', p.description || '', kindWord(m),
+          mv ? m.qty : m.delta, orName(m.location), orName(m.owner), mv ? orName(m.toLocation) : '', mv ? orName(m.toOwner) : '',
+          orName(m.person), m.note || '', m.edits?.length ? 'Yes' : '']);
       }
+      files.push(csvFile(`inventory-report-entries-${tag}.csv`, ent));
     }
-    const ent = [['Date', 'Time', 'Project', 'Part number', 'Description', 'Type', 'Quantity', 'Storage Location', 'Product Owner', 'Moved to storage location', 'Moved to product owner', 'Team Member', 'Note', 'Edited']];
-    for (const m of r.entries.slice().reverse()) {
-      const p = r.pById[m.productId], d = new Date(m.at), mv = m.kind === 'move';
-      ent.push([toDateInput(d), m.dateOnly ? '' : hhmm(d), r.pName[m.projectId], p.partNumber || '', p.description || '', kindWord(m),
-        mv ? m.qty : m.delta, orName(m.location), orName(m.owner), mv ? orName(m.toLocation) : '', mv ? orName(m.toOwner) : '',
-        orName(m.person), m.note || '', m.edits?.length ? 'Yes' : '']);
-    }
-    return [csvFile(`inventory-report-${tag}.csv`, sum), csvFile(`inventory-report-entries-${tag}.csv`, ent)];
+    return files;
   }
 
   /** Home screen nudge when there's data and no backup for REMIND_DAYS. */
@@ -3327,7 +3483,7 @@ export default {
       ['Storage location photos', 'Tap <b>Lists</b> › <b>Storage Locations</b> and tap a location. Tap <b>+ Add photo</b>, take a photo or choose one from your library, then give it a name, like Door or Shelves. Add as many as you like. Tap a photo to see it full size, swipe to see the next one, and use <b>Rename</b> or <b>Delete</b> at the bottom.'],
       ['Project product owners', 'When you create a project, tap the product owners who own the material on it (or type a new one). They show first when you add stock in that project, and if there is only one it is filled in for you. To change them, open the project and tap <b>⋮</b> › <b>Product owners for this project</b>.'],
       ['Team members', 'Add, Remove, Move and Correct stock count ask which <b>Team Member</b> is doing it. Pick a name, or choose <b>+ New team member…</b> to type one. The last name you picked is filled in next time. To rename or remove names, tap <b>Lists</b> (bottom of the screen) › <b>Team Members</b>. Renaming changes the name on every entry. Entries from before version 1.6 show Team Member as <b>Not set</b>; tap one in History and <b>Edit</b> it to fill it in.'],
-      ['Reports', 'Tap the <b>Reports</b> tab at the bottom of the screen, or open a project and tap <b>⋮</b> › <b>Reports</b>. Pick a project or All projects and the dates (This week, Last week, This month, Last month, Last 30 days, or type your own). Tap <b>Filters</b> to look at one storage location, product owner, team member or product. The report shows the totals added and used, then the same per product (with stock at the start and end, and when it was last used), per storage location, per product owner, per team member and per note, then every entry with its date, team member and note. Tap <b>Preview report</b> to see it exactly as the PDF will look, then <b>Print / save PDF</b> or <b>Close</b>. Tap <b>Print / save PDF</b> to print it or save it as a PDF (on iPhone, tap the Share button on the print screen), or <b>Share spreadsheet</b> for CSV files.'],
+      ['Reports', 'Tap the <b>Reports</b> tab at the bottom of the screen, or open a project and tap <b>⋮</b> › <b>Reports</b>. Tap one of the big buttons: <b>Stock &amp; reorder</b> (what to reorder, how many you have, and the totals), <b>Monthly use</b> (how much of each product was used each month), <b>Project total</b> (the whole project, from its first entry to today) or <b>Detailed report</b> (everything, including who added or took what, and when). Then pick a project or All projects and the dates. To choose exactly what is in the report, tap <b>What\'s in the report</b> and tick or untick each section: Reorder list, Totals, Stock on hand (tick <b>Show storage locations</b> to see where each product is kept), Used each month, and the details: By product, By storage location, By product owner, By team member, By note and Every entry. The app remembers your choice. Tap <b>Filters</b> to look at one storage location, product owner, team member or product. Tap <b>Preview report</b> to see it exactly as the PDF will look, then <b>Print / save PDF</b> or <b>Close</b>. Tap <b>Print / save PDF</b> to print it or save it as a PDF to email (on iPhone, tap the Share button on the print screen), or <b>Share spreadsheet</b> for a CSV file with the same sections.'],
       ['Moving stock', 'To move stock between storage locations or product owners (for example from Bin A to the truck), open the product and tap <b>⇄ Move</b>. Pick where it comes from, where it goes, and how many. The total stays the same and History shows one "Moved" entry.'],
       ['Low-stock warning', 'Open the product and tap <b>Low-stock warning</b> under the stock (or <b>⋮</b> › <b>Low-stock warning</b>). Enter a number: when the stock is at or below it, the product shows a red <b>Low</b> tag, the project shows how many products are low, and <b>Low stock only</b> lists just those. Leave it empty to turn the warning off. On the <b>Inventory</b> tab product page you can set it for each project at once. You can also set it when adding a product, when adding stock, or with <b>⋮</b> › <b>Edit product and photos</b>.'],
       ['History', "Open a product to see every change, newest first: the date, whether it was added, removed or moved, the quantity, the storage location and product owner, the team member, the total before → after, and the note."],
