@@ -68,6 +68,13 @@ A phone-first inventory tracker that works offline and installs to your home scr
   *Share spreadsheet* makes a summary CSV and an entries CSV. **Stock on hand** (1.11) lists stock at the
   end date per part number › project › storage location + product owner (also in the summary CSV). With
   All projects, the Product filter is a part number across projects (`invKey`).
+  **1.17**: four preset buttons (`PRESETS`: Stock & reorder, Monthly use, Project total, Detailed)
+  tick section checkboxes (`REP_SECTIONS`: reorder, totals, stock, locs, monthly, byProd, byLoc,
+  byOwn, byWho, byNote, entries) and set the dates (new periods: 2weeks, 3months, whole = from the
+  first entry). Only ticked sections show, print and go in the CSV (entries CSV only when Every entry
+  is ticked). Reorder list = `DB.isLow` right now; Stock on hand is one table per part number in
+  part-number order; Used each month = 'out' legs per month (tables of 4 months). The report
+  state (`repState`) is kept in localStorage.
 
 All data is stored on the phone (IndexedDB). There is no server and no sync.
 
