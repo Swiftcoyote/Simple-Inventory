@@ -2784,7 +2784,10 @@ export default {
   const REP_SECTIONS = [
     ['reorder', 'Reorder list', 'Products at or below their low-stock warning, right now', 'simple'],
     ['totals', 'Totals', 'Total added, used and in stock', 'simple'],
-    ['stock', 'Stock on hand', 'Added, used and in stock for each product', 'simple'],
+    ['stock', 'Stock on hand', 'One row per product, with the columns you tick below', 'simple'],
+    ['colAdded', 'Added', 'How many were added in these dates', 'simple', 'stock'],
+    ['colUsed', 'Used', 'How many were used in these dates', 'simple', 'stock'],
+    ['colEnd', 'In stock', 'How many we have at the end of these dates', 'simple', 'stock'],
     ['locs', 'Show storage locations', 'Where each product is kept', 'simple', 'stock'],
     ['monthly', 'Used each month', 'One column per month, with a total', 'simple'],
     ['byProd', 'By product', 'Start, added, used and end for each product, and when it was last used', 'details'],
@@ -2797,9 +2800,9 @@ export default {
   const ALL_SECS = REP_SECTIONS.map(x => x[0]);
   const secSet = (...keys) => Object.fromEntries(ALL_SECS.map(k => [k, keys.includes(k)]));
   const PRESETS = [
-    { key: 'stock', icon: '📦', name: 'Stock & reorder', desc: 'How many we have and what to reorder', title: 'Stock & reorder report', period: '2weeks', secs: secSet('reorder', 'totals', 'stock') },
+    { key: 'stock', icon: '📦', name: 'Stock & reorder', desc: 'How many we have and what to reorder', title: 'Stock & reorder report', period: '2weeks', secs: secSet('reorder', 'totals', 'stock', 'colEnd') },
     { key: 'monthly', icon: '📅', name: 'Monthly use', desc: 'How much was used each month', title: 'Monthly use report', period: '3months', secs: secSet('totals', 'monthly') },
-    { key: 'total', icon: '🏁', name: 'Project total', desc: 'Everything used from start to end', title: 'Project total report', period: 'whole', secs: secSet('totals', 'stock', 'monthly') },
+    { key: 'total', icon: '🏁', name: 'Project total', desc: 'Everything used from start to end', title: 'Project total report', period: 'whole', secs: secSet('totals', 'stock', 'colAdded', 'colUsed', 'colEnd', 'monthly') },
     { key: 'detail', icon: '🔍', name: 'Detailed report', desc: 'Who added or took what, and when', title: 'Detailed report', period: null, secs: secSet(...ALL_SECS) },
   ];
   const repState = (() => {
@@ -2808,6 +2811,8 @@ export default {
     const st = { proj: '', period: '2weeks', from: '', to: '', loc: ALL, own: ALL, who: ALL, prod: ALL, preset: 'stock', ...saved };
     // reports saved before 1.17 have no section boxes: start them on Stock & reorder
     if (!st.secs) { st.preset = 'stock'; st.secs = { ...PRESETS[0].secs }; }
+    // 1.18: Stock on hand columns. Reports saved by 1.17 showed all three.
+    if (!('colEnd' in st.secs)) st.secs.colAdded = st.secs.colUsed = st.secs.colEnd = true;
     for (const k of ALL_SECS) st.secs[k] = !!st.secs[k];
     if (st.period === '30') st.period = 'month';
     return st;
@@ -3025,7 +3030,8 @@ export default {
     const secs = st.secs;
     const preset = PRESETS.find(x => x.key === st.preset);
     const repTitle = preset ? preset.title : 'Inventory report';
-    const nOn = ALL_SECS.filter(k => secs[k]).length;
+    const TOP_SECS = REP_SECTIONS.filter(x => !x[4]).map(x => x[0]);   // sections, not their options
+    const nOn = TOP_SECS.filter(k => secs[k]).length;
     const onNames = REP_SECTIONS.filter(x => secs[x[0]] && !x[4]).map(x => x[1]);
     const monName = (ym, long) => new Date(`${ym}-15T12:00:00`).toLocaleDateString([], { month: long ? 'long' : 'short', ...(r.months[0].slice(0, 4) !== r.months[r.months.length - 1].slice(0, 4) ? { year: '2-digit' } : {}) });
     const pCell = (p, sub = '') => `<td><div class="rp-pn">${esc(p.partNumber || p.description || 'Untitled')}</div>${p.partNumber && p.description ? `<div class="rp-ds">${esc(p.description)}</div>` : ''}${sub}</td>`;
@@ -3044,17 +3050,19 @@ export default {
       </div>
       ${t.count ? `<div class="rg-extra">Count corrections ${signed(t.count)}</div>` : ''}
       ${showStock ? '' : `<p class="hint">In stock is left out while a team member is picked, because stock isn't owned by a team member.</p>`}`;
+    // 1.18: the Added, Used and In stock columns each have a checkbox
+    const cA = secs.colAdded, cU = secs.colUsed, cE = secs.colEnd && showStock;
     const stockHtml = () => `<h2 class="section">Stock on hand</h2>
       ${r.simple.length ? `<div class="card tcard"><table class="stbl">
-        <thead><tr><th>Product</th><th class="n">Added</th><th class="n">Used</th>${showStock ? '<th class="n">In stock</th>' : ''}</tr></thead>
+        <thead><tr><th>Product</th>${cA ? '<th class="n">Added</th>' : ''}${cU ? '<th class="n">Used</th>' : ''}${cE ? '<th class="n">In stock</th>' : ''}</tr></thead>
         <tbody>${r.simple.map(o => {
           const sub = [
-            many && o.projects.length ? `<div class="loc">${o.projects.map(([n, q, lo]) => `${esc(n)}: ${lo && showStock ? `<b class="warn">${q} ⚠</b>` : q}`).join(' · ')}</div>` : '',
+            many && cE && o.projects.length ? `<div class="loc">${o.projects.map(([n, q, lo]) => `${esc(n)}: ${lo ? `<b class="warn">${q} ⚠</b>` : q}`).join(' · ')}</div>` : '',
             secs.locs && o.places.size ? `<div class="loc">📍 ${[...o.places].sort((a, b) => (a[0] === '') - (b[0] === '') || nat(a[0], b[0])).map(([l, q]) => `${esc(l || NOT_SET)}: ${q}`).join(' · ')}</div>` : '',
           ].join('');
-          return `<tr>${pCell(o.product, sub)}<td class="n">${o.added}</td><td class="n">${o.used}</td>${showStock ? `<td class="n ${o.low && !many ? 'warn' : ''}">${o.end}${o.low && !many ? ' ⚠' : ''}</td>` : ''}</tr>`;
+          return `<tr>${pCell(o.product, sub)}${cA ? `<td class="n">${o.added}</td>` : ''}${cU ? `<td class="n">${o.used}</td>` : ''}${cE ? `<td class="n ${o.low && !many ? 'warn' : ''}">${o.end}${o.low && !many ? ' ⚠' : ''}</td>` : ''}</tr>`;
         }).join('')}</tbody></table></div>
-        ${showStock && r.simple.some(o => o.low) ? `<p class="hint">⚠ = at or below its low-stock warning${many ? ' in that project' : ''}.</p>` : ''}`
+        ${cE && r.simple.some(o => o.low) ? `<p class="hint">⚠ = at or below its low-stock warning${many ? ' in that project' : ''}.</p>` : ''}`
         : `<div class="card banner">Nothing was added, used or in stock for these dates.</div>`}`;
     const monthlyHtml = () => {
       if (!r.used.length) return `<h2 class="section">Used each month</h2><div class="card banner">Nothing was used in these dates.</div>`;
@@ -3125,7 +3133,7 @@ export default {
           </div>
         </div>
         <details class="more-filters secs-box" ${st.secsOpen ? 'open' : ''}>
-          <summary>What's in the report (${nOn} of ${ALL_SECS.length})</summary>
+          <summary>What's in the report (${nOn} of ${TOP_SECS.length})</summary>
           <div class="secs-now">${onNames.length ? esc(onNames.join(' · ')) : 'Nothing ticked yet'}</div>
           ${['simple', 'details'].map(g => `<div class="secs-h">${g === 'simple' ? 'Simple' : 'Details'}</div>
             ${REP_SECTIONS.filter(x => x[3] === g).map(([k, l, d, , parent]) => `<label class="ck ${parent ? 'sub' : ''}">
@@ -3239,9 +3247,10 @@ export default {
       sum.push([r.total.added, r.total.used, ...(showStock ? [r.total.end] : []), r.total.count]);
     }
     if (anyData && secs.stock) {
-      sum.push([], ['Stock on hand'], ['Part number', 'Description', 'Added', 'Used', ...(showStock ? ['In stock', 'Low'] : []), ...(many ? ['Projects'] : []), ...(secs.locs ? ['Storage locations'] : [])]);
-      for (const o of r.simple) sum.push([pn(o.product), ds(o.product), o.added, o.used, ...(showStock ? [o.end, o.low ? 'Yes' : ''] : []),
-        ...(many ? [o.projects.map(([n, q, lo]) => `${n}: ${q}${lo ? ' (low)' : ''}`).join('; ')] : []),
+      const cA = secs.colAdded, cU = secs.colUsed, cE = secs.colEnd && showStock;
+      sum.push([], ['Stock on hand'], ['Part number', 'Description', ...(cA ? ['Added'] : []), ...(cU ? ['Used'] : []), ...(cE ? ['In stock', 'Low'] : []), ...(many && cE ? ['Projects'] : []), ...(secs.locs ? ['Storage locations'] : [])]);
+      for (const o of r.simple) sum.push([pn(o.product), ds(o.product), ...(cA ? [o.added] : []), ...(cU ? [o.used] : []), ...(cE ? [o.end, o.low ? 'Yes' : ''] : []),
+        ...(many && cE ? [o.projects.map(([n, q, lo]) => `${n}: ${q}${lo ? ' (low)' : ''}`).join('; ')] : []),
         ...(secs.locs ? [[...o.places].map(([l, q]) => `${orName(l)}: ${q}`).join('; ')] : [])]);
     }
     if (anyData && secs.monthly) {
@@ -3483,7 +3492,7 @@ export default {
       ['Storage location photos', 'Tap <b>Lists</b> › <b>Storage Locations</b> and tap a location. Tap <b>+ Add photo</b>, take a photo or choose one from your library, then give it a name, like Door or Shelves. Add as many as you like. Tap a photo to see it full size, swipe to see the next one, and use <b>Rename</b> or <b>Delete</b> at the bottom.'],
       ['Project product owners', 'When you create a project, tap the product owners who own the material on it (or type a new one). They show first when you add stock in that project, and if there is only one it is filled in for you. To change them, open the project and tap <b>⋮</b> › <b>Product owners for this project</b>.'],
       ['Team members', 'Add, Remove, Move and Correct stock count ask which <b>Team Member</b> is doing it. Pick a name, or choose <b>+ New team member…</b> to type one. The last name you picked is filled in next time. To rename or remove names, tap <b>Lists</b> (bottom of the screen) › <b>Team Members</b>. Renaming changes the name on every entry. Entries from before version 1.6 show Team Member as <b>Not set</b>; tap one in History and <b>Edit</b> it to fill it in.'],
-      ['Reports', 'Tap the <b>Reports</b> tab at the bottom of the screen, or open a project and tap <b>⋮</b> › <b>Reports</b>. Tap one of the big buttons: <b>Stock &amp; reorder</b> (what to reorder, how many you have, and the totals), <b>Monthly use</b> (how much of each product was used each month), <b>Project total</b> (the whole project, from its first entry to today) or <b>Detailed report</b> (everything, including who added or took what, and when). Then pick a project or All projects and the dates. To choose exactly what is in the report, tap <b>What\'s in the report</b> and tick or untick each section: Reorder list, Totals, Stock on hand (tick <b>Show storage locations</b> to see where each product is kept), Used each month, and the details: By product, By storage location, By product owner, By team member, By note and Every entry. The app remembers your choice. Tap <b>Filters</b> to look at one storage location, product owner, team member or product. Tap <b>Preview report</b> to see it exactly as the PDF will look, then <b>Print / save PDF</b> or <b>Close</b>. Tap <b>Print / save PDF</b> to print it or save it as a PDF to email (on iPhone, tap the Share button on the print screen), or <b>Share spreadsheet</b> for a CSV file with the same sections.'],
+      ['Reports', 'Tap the <b>Reports</b> tab at the bottom of the screen, or open a project and tap <b>⋮</b> › <b>Reports</b>. Tap one of the big buttons: <b>Stock &amp; reorder</b> (what to reorder, how many you have, and the totals), <b>Monthly use</b> (how much of each product was used each month), <b>Project total</b> (the whole project, from its first entry to today) or <b>Detailed report</b> (everything, including who added or took what, and when). Then pick a project or All projects and the dates. To choose exactly what is in the report, tap <b>What\'s in the report</b> and tick or untick each section: Reorder list, Totals, Stock on hand (tick <b>Added</b>, <b>Used</b> and <b>In stock</b> to pick its columns, and <b>Show storage locations</b> to see where each product is kept), Used each month, and the details: By product, By storage location, By product owner, By team member, By note and Every entry. The app remembers your choice. Tap <b>Filters</b> to look at one storage location, product owner, team member or product. Tap <b>Preview report</b> to see it exactly as the PDF will look, then <b>Print / save PDF</b> or <b>Close</b>. Tap <b>Print / save PDF</b> to print it or save it as a PDF to email (on iPhone, tap the Share button on the print screen), or <b>Share spreadsheet</b> for a CSV file with the same sections.'],
       ['Moving stock', 'To move stock between storage locations or product owners (for example from Bin A to the truck), open the product and tap <b>⇄ Move</b>. Pick where it comes from, where it goes, and how many. The total stays the same and History shows one "Moved" entry.'],
       ['Low-stock warning', 'Open the product and tap <b>Low-stock warning</b> under the stock (or <b>⋮</b> › <b>Low-stock warning</b>). Enter a number: when the stock is at or below it, the product shows a red <b>Low</b> tag, the project shows how many products are low, and <b>Low stock only</b> lists just those. Leave it empty to turn the warning off. On the <b>Inventory</b> tab product page you can set it for each project at once. You can also set it when adding a product, when adding stock, or with <b>⋮</b> › <b>Edit product and photos</b>.'],
       ['History', "Open a product to see every change, newest first: the date, whether it was added, removed or moved, the quantity, the storage location and product owner, the team member, the total before → after, and the note."],
